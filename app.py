@@ -11,7 +11,7 @@ import re
 import nltk
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.0", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v2.1", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -22,7 +22,7 @@ except LookupError:
     st.success("Recursos listos.")
 
 # ==============================================================================
-# SECCIÓN DE FUNCIONES AUXILIARES (Algunas modificadas para Pandas)
+# SECCIÓN DE FUNCIONES AUXILIARES
 # ==============================================================================
 def norm_key(text):
     return re.sub(r'\W+', '', str(text).lower().strip()) if text else ""
@@ -71,7 +71,6 @@ def to_excel_from_df(df, original_headers):
     
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_to_excel.to_excel(writer, index=False, sheet_name='Resultado')
-        # Aquí se podrían añadir formatos de xlsxwriter si se pierden los links
     return output.getvalue()
 
 @st.cache_resource
@@ -83,7 +82,7 @@ def load_ml_models():
     return sentiment_model, sentiment_vectorizer, topic_model, topic_vectorizer
 
 # ==============================================================================
-# LÓGICA DE PROCESAMIENTO PRINCIPAL (REFACTORIZADA CON PANDAS)
+# LÓGICA DE PROCESAMIENTO PRINCIPAL
 # ==============================================================================
 def run_full_process(dossier_file, config_file):
     
@@ -94,7 +93,9 @@ def run_full_process(dossier_file, config_file):
     progress_text.info("Paso 1/8: Cargando modelos de IA y archivos de configuración...")
     try:
         sentiment_model, sentiment_vectorizer, topic_model, topic_vectorizer = load_ml_models()
-        config_sheets = pd.read_excel(config_file, sheet_name=None)
+        
+        # --- SOLUCIÓN AL ValueError: Usar .read() para pasar los bytes a Pandas ---
+        config_sheets = pd.read_excel(config_file.read(), sheet_name=None)
         
         region_map = pd.Series(config_sheets['Regiones'].iloc[:, 1].values, index=config_sheets['Regiones'].iloc[:, 0].astype(str).str.lower().str.strip()).to_dict()
         internet_map = pd.Series(config_sheets['Internet'].iloc[:, 1].values, index=config_sheets['Internet'].iloc[:, 0].astype(str).str.lower().str.strip()).to_dict()
@@ -108,7 +109,7 @@ def run_full_process(dossier_file, config_file):
         st.error(f"Error en el archivo de Configuración: Falta la hoja '{e}'. Por favor, revisa el archivo `Configuracion.xlsx`.")
         st.stop()
 
-    # --- PASO 2: LIMPIEZA INICIAL Y EXPANSIÓN DE MENCIONES (Pre-Pandas) ---
+    # --- PASO 2: LIMPIEZA INICIAL Y EXPANSIÓN DE MENCIONES ---
     progress_text.info("Paso 2/8: Realizando limpieza inicial y expansión de filas...")
     wb = load_workbook(dossier_file)
     sheet = wb.active
@@ -135,7 +136,6 @@ def run_full_process(dossier_file, config_file):
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
     
-    # Mapeos
     df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     is_internet = df['Tipo de Medio'].astype(str).str.lower().str.strip() == 'internet'
@@ -155,18 +155,15 @@ def run_full_process(dossier_file, config_file):
     if not df_valid.empty:
         df_valid['texto_para_ia'] = df_valid['Título'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
         
-        # Tono
         X_sent = sentiment_vectorizer.transform(df_valid['texto_para_ia'])
         preds_sent = sentiment_model.predict(X_sent)
         label_map_inv = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo'}
         df_valid['Tono'] = [label_map_inv.get(p, 'Indefinido') for p in preds_sent]
         
-        # Tema General
         df_valid["resumen_procesado"] = df_valid["texto_para_ia"].apply(preprocess_text_for_topic)
         X_tema = topic_vectorizer.transform(df_valid["resumen_procesado"])
         df_valid["Temas Generales - Tema"] = topic_model.predict(X_tema)
         
-        # Actualizar el DataFrame principal
         df.update(df_valid[['Tono', 'Temas Generales - Tema']])
 
     # --- PASO 6: HOMOGENEIZACIÓN DE TEMAS POR TÍTULO ---
@@ -186,7 +183,6 @@ def run_full_process(dossier_file, config_file):
     st.balloons()
     progress_text.success("¡Proceso completado con éxito!")
 
-    # --- MOSTRAR RESULTADOS Y ESTADÍSTICAS ---
     st.subheader("📊 Resumen del Proceso")
     col1, col2, col3 = st.columns(3)
     col1.metric("Filas Totales Procesadas", len(df))
@@ -198,17 +194,15 @@ def run_full_process(dossier_file, config_file):
         medios_sin_region = df[df['Región'].isnull()]['Medio'].unique()
         if len(medios_sin_region) > 0:
             st.warning(f"**{len(medios_sin_region)} medios no encontrados en el mapeo de Regiones:**")
-            st.code('\n'.join(medios_sin_region[:10])) # Muestra hasta 10
+            st.code('\n'.join(medios_sin_region[:10]))
         else:
             st.success("Todos los medios fueron mapeados a una región.")
 
     st.subheader("✍️ Previsualización y Edición de Resultados")
     st.info("Puedes editar los datos directamente en la tabla. Los cambios se guardarán en el archivo descargado.")
     
-    # Usamos st.data_editor para permitir la edición
-    edited_df = st.data_editor(df, num_rows="dynamic", key="final_editor")
+    edited_df = st.data_editor(df, num_rows="dynamic", key="final_editor", use_container_width=True)
     
-    # --- BOTÓN DE DESCARGA ---
     excel_data = to_excel_from_df(edited_df, original_headers)
     st.download_button(
         label="📥 Descargar Archivo Final Procesado",
@@ -218,17 +212,17 @@ def run_full_process(dossier_file, config_file):
     )
 
 # ==============================================================================
-# INTERFAZ PRINCIPAL DE STREAMLIT (REDISEÑADA)
+# INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.0")
+st.title("🚀 Procesador Inteligente de Dossiers v2.1")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 
 st.info(
     "**Instrucciones:**\n\n"
     "1. Prepara tu archivo **Dossier** principal en formato `.xlsx`.\n"
-    "2. Prepara tu archivo de mapeos llamado **`Configuracion.xlsx`** (ver estructura requerida más abajo).\n"
-    "3. Sube ambos archivos en el área de abajo. ¡Puedes arrastrarlos y soltarlos juntos!\n"
-    "4. Haz clic en 'Iniciar Proceso' y espera la magia."
+    "2. Prepara tu archivo de mapeos llamado **`Configuracion.xlsx`**.\n"
+    "3. Sube ambos archivos juntos en el área de abajo.\n"
+    "4. Haz clic en 'Iniciar Proceso'."
 )
 
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
@@ -240,7 +234,6 @@ with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
     - **`Mapa_Temas`**: Columna A (Temas Generales - Tema), Columna B (Tema).
     """)
 
-# --- NUEVA ÁREA DE CARGA DE ARCHIVOS ---
 uploaded_files = st.file_uploader(
     "Arrastra y suelta tus archivos aquí (Dossier y Configuracion)",
     type=["xlsx"],
@@ -254,10 +247,9 @@ if uploaded_files:
     for file in uploaded_files:
         if 'config' in file.name.lower():
             config_file = file
-        else: # Asume que el otro es el dossier
+        else:
             dossier_file = file
 
-    # Muestra los archivos cargados para confirmación del usuario
     if dossier_file:
         st.success(f"Archivo Dossier cargado: **{dossier_file.name}**")
     else:
@@ -268,6 +260,5 @@ if uploaded_files:
     else:
         st.warning("No se ha subido el archivo `Configuracion.xlsx`.")
 
-# Botón de inicio se activa solo si ambos archivos están presentes
-if st.button("▶️ Iniciar Proceso Completo", disabled=not (dossier_file and config_file)):
+if st.button("▶️ Iniciar Proceso Completo", disabled=not (dossier_file and config_file), type="primary"):
     run_full_process(dossier_file, config_file)
