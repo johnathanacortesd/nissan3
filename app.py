@@ -8,7 +8,7 @@ import re
 import nltk
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.4", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v2.5", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -71,10 +71,8 @@ def to_excel_from_df(df, final_order):
         workbook = writer.book
         worksheet = writer.sheets['Resultado']
         
-        # Formato para hipervínculos
         link_format = workbook.add_format({'color': 'blue', 'underline': 1})
         
-        # Escribir hipervínculos
         for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
             if col_name in df_to_excel.columns:
                 col_idx = df_to_excel.columns.get_loc(col_name)
@@ -131,15 +129,11 @@ def run_full_process(dossier_file, config_file):
         row_values = [cell.value for cell in row]
         row_data = dict(zip(original_headers, row_values))
 
-        # Extraer URLs
-        if link_nota_idx != -1:
-            row_data['Link Nota'] = extract_link_from_cell(row[link_nota_idx])
-        if link_stream_idx != -1:
-            row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[link_stream_idx])
+        if link_nota_idx != -1: row_data['Link Nota'] = extract_link_from_cell(row[link_nota_idx])
+        if link_stream_idx != -1: row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[link_stream_idx])
 
         menciones = [m.strip() for m in str(row_data.get('Menciones - Empresa') or '').split(';') if m.strip()]
-        if not menciones:
-            rows_to_expand.append(row_data)
+        if not menciones: rows_to_expand.append(row_data)
         else:
             for mencion in menciones:
                 new_row = row_data.copy()
@@ -151,11 +145,15 @@ def run_full_process(dossier_file, config_file):
 
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
     for col in original_headers:
-        if col not in df.columns:
-            df[col] = None
+        if col not in df.columns: df[col] = None
             
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
+
+    # --- INICIO DE LA FUNCIONALIDAD RESTAURADA ---
+    tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
+    df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
+    # --- FIN DE LA FUNCIONALIDAD RESTAURADA ---
     
     df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
@@ -187,9 +185,7 @@ def run_full_process(dossier_file, config_file):
     progress_text.info("Paso 6/8: Homogeneizando temas para mayor consistencia...")
     df_valid_homog = df[df['Mantener'] == 'Conservar'].copy()
     if not df_valid_homog.empty and 'Temas Generales - Tema' in df_valid_homog.columns:
-        homogenized_temas = df_valid_homog.groupby('titulo_norm')['Temas Generales - Tema'].transform(
-            lambda x: x.mode()[0] if not x.mode().empty else x
-        )
+        homogenized_temas = df_valid_homog.groupby('titulo_norm')['Temas Generales - Tema'].transform(lambda x: x.mode()[0] if not x.mode().empty else x)
         df_valid_homog['Temas Generales - Tema'] = homogenized_temas
         df.update(df_valid_homog[['Temas Generales - Tema']])
 
@@ -197,7 +193,6 @@ def run_full_process(dossier_file, config_file):
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
 
-    # Limpiar valores para filas duplicadas
     df.loc[df['Mantener'] == 'Eliminar', ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
     
     progress_text.info("Paso 8/8: Generando resultados finales...")
@@ -212,7 +207,7 @@ def run_full_process(dossier_file, config_file):
         "Link (Streaming - Imagen)", "Menciones - Empresa"
     ]
     
-    df_final = df.copy() # Mantener todas las filas
+    df_final = df.copy()
     df_final = df_final.reset_index(drop=True)
 
     st.subheader("📊 Resumen del Proceso")
@@ -227,7 +222,6 @@ def run_full_process(dossier_file, config_file):
     
     final_columns_in_df = [col for col in final_order if col in df_final.columns]
     
-    # Preparamos las columnas de link para la edición, mostrando 'Link' si hay URL
     df_for_editor = df_final[final_columns_in_df].copy()
     for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
         if col_name in df_for_editor.columns:
@@ -235,7 +229,6 @@ def run_full_process(dossier_file, config_file):
             
     edited_df_display = st.data_editor(df_for_editor, num_rows="dynamic", key="final_editor", use_container_width=True)
     
-    # Unimos las ediciones con las URLs originales para la descarga
     df_to_download = edited_df_display.copy()
     for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
         if col_name in df_to_download.columns:
@@ -252,7 +245,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.4")
+st.title("🚀 Procesador Inteligente de Dossiers v2.5")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 
 st.info(
