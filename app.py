@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.styles import Font, Alignment, NamedStyle
 from collections import defaultdict, Counter
-from copy import deepcopy
 import datetime
 import io
 import joblib
@@ -11,7 +9,7 @@ import re
 import nltk
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.1", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v2.2", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -63,9 +61,7 @@ def preprocess_text_for_topic(text: str) -> str:
 
 def to_excel_from_df(df, original_headers):
     output = io.BytesIO()
-    # Reordenar columnas según el orden original y añadir las nuevas
-    final_order = original_headers + [col for col in ['Duplicada', 'Posible Duplicada', 'Mantener'] if col in df.columns]
-    # Asegurarse de que todas las columnas existen en el df antes de reordenar
+    final_order = original_headers + [col for col in ['Mantener'] if col in df.columns]
     final_columns_in_df = [col for col in final_order if col in df.columns]
     df_to_excel = df[final_columns_in_df]
     
@@ -86,15 +82,12 @@ def load_ml_models():
 # ==============================================================================
 def run_full_process(dossier_file, config_file):
     
-    # --- PASO 1: CARGAR DATOS Y MODELOS ---
     st.markdown("---")
     progress_text = st.empty()
     
-    progress_text.info("Paso 1/8: Cargando modelos de IA y archivos de configuración...")
+    progress_text.info("Paso 1/8: Cargando modelos y configuración...")
     try:
         sentiment_model, sentiment_vectorizer, topic_model, topic_vectorizer = load_ml_models()
-        
-        # --- SOLUCIÓN AL ValueError: Usar .read() para pasar los bytes a Pandas ---
         config_sheets = pd.read_excel(config_file.read(), sheet_name=None)
         
         region_map = pd.Series(config_sheets['Regiones'].iloc[:, 1].values, index=config_sheets['Regiones'].iloc[:, 0].astype(str).str.lower().str.strip()).to_dict()
@@ -103,14 +96,13 @@ def run_full_process(dossier_file, config_file):
         final_topic_map = pd.Series(config_sheets['Mapa_Temas'].iloc[:, 1].values, index=config_sheets['Mapa_Temas'].iloc[:, 0].astype(str).str.strip()).to_dict()
         
     except FileNotFoundError as e:
-        st.error(f"Error fatal: No se pudo cargar un archivo de modelo. Asegúrate que los archivos .pkl estén en la misma carpeta. Archivo: {e.filename}")
+        st.error(f"Error: Archivo de modelo no encontrado: {e.filename}. Asegúrate que los archivos .pkl estén en la misma carpeta.")
         st.stop()
     except KeyError as e:
-        st.error(f"Error en el archivo de Configuración: Falta la hoja '{e}'. Por favor, revisa el archivo `Configuracion.xlsx`.")
+        st.error(f"Error: Falta la hoja '{e}' en `Configuracion.xlsx`.")
         st.stop()
 
-    # --- PASO 2: LIMPIEZA INICIAL Y EXPANSIÓN DE MENCIONES ---
-    progress_text.info("Paso 2/8: Realizando limpieza inicial y expansión de filas...")
+    progress_text.info("Paso 2/8: Limpieza inicial y expansión de filas...")
     wb = load_workbook(dossier_file)
     sheet = wb.active
     original_headers = [cell.value for cell in sheet[1] if cell.value]
@@ -131,7 +123,6 @@ def run_full_process(dossier_file, config_file):
     df = pd.DataFrame(rows_to_expand)
     df['Mantener'] = 'Conservar'
 
-    # --- PASO 3: LIMPIEZA Y MAPEADO CON PANDAS ---
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
@@ -141,7 +132,6 @@ def run_full_process(dossier_file, config_file):
     is_internet = df['Tipo de Medio'].astype(str).str.lower().str.strip() == 'internet'
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    # --- PASO 4: DETECCIÓN DE DUPLICADOS ---
     progress_text.info("Paso 4/8: Detectando y marcando duplicados...")
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     dup_cols = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
@@ -149,7 +139,6 @@ def run_full_process(dossier_file, config_file):
     df.loc[df_dups.index, 'Mantener'] = 'Eliminar'
     df.loc[df_dups.index, ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
     
-    # --- PASO 5: INFERENCIA DE IA ---
     progress_text.info("Paso 5/8: Aplicando modelos de IA para Tono y Tema...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
     if not df_valid.empty:
@@ -166,17 +155,28 @@ def run_full_process(dossier_file, config_file):
         
         df.update(df_valid[['Tono', 'Temas Generales - Tema']])
 
-    # --- PASO 6: HOMOGENEIZACIÓN DE TEMAS POR TÍTULO ---
+    # --- INICIO DE LA CORRECCIÓN ---
     progress_text.info("Paso 6/8: Homogeneizando temas para mayor consistencia...")
-    if 'Temas Generales - Tema' in df.columns:
-        df['Temas Generales - Tema'] = df.groupby('titulo_norm')['Temas Generales - Tema'].transform(lambda x: x.mode()[0] if not x.mode().empty else x)
+    df_valid_homog = df[df['Mantener'] == 'Conservar'].copy()
+    
+    if not df_valid_homog.empty and 'Temas Generales - Tema' in df_valid_homog.columns:
+        # 1. Realizar la homogeneización SÓLO sobre las filas válidas
+        homogenized_temas = df_valid_homog.groupby('titulo_norm')['Temas Generales - Tema'].transform(
+            lambda x: x.mode()[0] if not x.mode().empty else x
+        )
+        # 2. Asignar los temas corregidos a la copia del dataframe válido
+        df_valid_homog['Temas Generales - Tema'] = homogenized_temas
+        
+        # 3. Actualizar el DataFrame principal SÓLO con los datos corregidos de las filas válidas
+        df.update(df_valid_homog[['Temas Generales - Tema']])
+    # --- FIN DE LA CORRECCIÓN ---
 
-    # --- PASO 7: MAPEO FINAL DE TEMA ---
     progress_text.info("Paso 7/8: Realizando el mapeo final de Tema...")
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
+        # Limpieza para filas duplicadas, asegurando que Tema también sea 'Duplicada'
+        df.loc[df['Mantener'] == 'Eliminar', 'Tema'] = 'Duplicada'
 
-    # --- PASO 8: PREPARACIÓN FINAL Y ESTADÍSTICAS ---
     progress_text.info("Paso 8/8: Generando resultados y estadísticas...")
     df.drop(columns=['titulo_norm'], inplace=True, errors='ignore')
     
@@ -201,7 +201,10 @@ def run_full_process(dossier_file, config_file):
     st.subheader("✍️ Previsualización y Edición de Resultados")
     st.info("Puedes editar los datos directamente en la tabla. Los cambios se guardarán en el archivo descargado.")
     
-    edited_df = st.data_editor(df, num_rows="dynamic", key="final_editor", use_container_width=True)
+    final_display_cols = original_headers + ['Mantener']
+    final_display_cols_in_df = [col for col in final_display_cols if col in df.columns]
+    
+    edited_df = st.data_editor(df[final_display_cols_in_df], num_rows="dynamic", key="final_editor", use_container_width=True)
     
     excel_data = to_excel_from_df(edited_df, original_headers)
     st.download_button(
@@ -214,7 +217,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.1")
+st.title("🚀 Procesador Inteligente de Dossiers v2.2")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 
 st.info(
