@@ -8,7 +8,7 @@ import re
 import nltk
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.3", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v2.4", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -21,6 +21,12 @@ except LookupError:
 # ==============================================================================
 # SECCIÓN DE FUNCIONES AUXILIARES
 # ==============================================================================
+def extract_link_from_cell(cell):
+    """Extrae el hipervínculo de una celda de openpyxl."""
+    if cell.hyperlink and cell.hyperlink.target:
+        return cell.hyperlink.target
+    return None
+
 def convert_html_entities(text):
     if not isinstance(text, str): return text
     html_entities = {'á': 'á', 'é': 'é', 'í': 'í', 'ó': 'ó', 'ú': 'ú', 'ñ': 'ñ', 'Á': 'Á', 'É': 'É', 'Í': 'Í', 'Ó': 'Ó', 'Ú': 'Ú', 'Ñ': 'Ñ', '\"': '\"', '“': '\"', '”': '\"', '‘': "'", '’': "'", 'Â': '', 'â': '', '€': '', '™': ''}
@@ -57,12 +63,25 @@ def preprocess_text_for_topic(text: str) -> str:
 
 def to_excel_from_df(df, final_order):
     output = io.BytesIO()
-    # Asegurarse de que todas las columnas existen en el df antes de reordenar
     final_columns_in_df = [col for col in final_order if col in df.columns]
     df_to_excel = df[final_columns_in_df]
-    
+
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_to_excel.to_excel(writer, index=False, sheet_name='Resultado')
+        workbook = writer.book
+        worksheet = writer.sheets['Resultado']
+        
+        # Formato para hipervínculos
+        link_format = workbook.add_format({'color': 'blue', 'underline': 1})
+        
+        # Escribir hipervínculos
+        for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
+            if col_name in df_to_excel.columns:
+                col_idx = df_to_excel.columns.get_loc(col_name)
+                for row_idx, url in enumerate(df_to_excel[col_name]):
+                    if pd.notna(url) and isinstance(url, str) and url.startswith('http'):
+                        worksheet.write_url(row_idx + 1, col_idx, url, link_format, 'Link')
+                        
     return output.getvalue()
 
 @st.cache_resource
@@ -98,15 +117,26 @@ def run_full_process(dossier_file, config_file):
         st.error(f"Error: Falta la hoja '{e}' en `Configuracion.xlsx`.")
         st.stop()
 
-    progress_text.info("Paso 2/8: Limpieza inicial y expansión de filas...")
+    progress_text.info("Paso 2/8: Leyendo Dossier y expandiendo filas...")
     wb = load_workbook(dossier_file)
     sheet = wb.active
     original_headers = [cell.value for cell in sheet[1] if cell.value]
-    
+    link_nota_idx = original_headers.index('Link Nota') if 'Link Nota' in original_headers else -1
+    link_stream_idx = original_headers.index('Link (Streaming - Imagen)') if 'Link (Streaming - Imagen)' in original_headers else -1
+
     rows_to_expand = []
-    for row in sheet.iter_rows(min_row=2, values_only=True):
-        if all(c is None for c in row): continue
-        row_data = dict(zip(original_headers, row))
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=2)):
+        if all(c.value is None for c in row): continue
+        
+        row_values = [cell.value for cell in row]
+        row_data = dict(zip(original_headers, row_values))
+
+        # Extraer URLs
+        if link_nota_idx != -1:
+            row_data['Link Nota'] = extract_link_from_cell(row[link_nota_idx])
+        if link_stream_idx != -1:
+            row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[link_stream_idx])
+
         menciones = [m.strip() for m in str(row_data.get('Menciones - Empresa') or '').split(';') if m.strip()]
         if not menciones:
             rows_to_expand.append(row_data)
@@ -120,7 +150,6 @@ def run_full_process(dossier_file, config_file):
     df['Mantener'] = 'Conservar'
 
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
-    # Asegurar que todas las columnas existan, rellenando con None si es necesario
     for col in original_headers:
         if col not in df.columns:
             df[col] = None
@@ -136,8 +165,8 @@ def run_full_process(dossier_file, config_file):
     progress_text.info("Paso 4/8: Detectando y marcando duplicados...")
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     dup_cols = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
-    df_dups = df[df.duplicated(subset=dup_cols, keep='first')]
-    df.loc[df_dups.index, 'Mantener'] = 'Eliminar'
+    duplicated_mask = df.duplicated(subset=dup_cols, keep='first')
+    df.loc[duplicated_mask, 'Mantener'] = 'Eliminar'
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA para Tono y Tema...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -168,11 +197,13 @@ def run_full_process(dossier_file, config_file):
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
 
-    progress_text.info("Paso 8/8: Generando resultados y estadísticas...")
+    # Limpiar valores para filas duplicadas
+    df.loc[df['Mantener'] == 'Eliminar', ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
+    
+    progress_text.info("Paso 8/8: Generando resultados finales...")
     st.balloons()
     progress_text.success("¡Proceso completado con éxito!")
 
-    # --- DEFINIR ORDEN FINAL Y FILTRAR ---
     final_order = [
         "ID Noticia", "Fecha", "Hora", "Medio", "Tipo de Medio", "Sección - Programa", 
         "Región", "Título", "Autor - Conductor", "Nro. Pagina", "Dimensión", 
@@ -181,32 +212,36 @@ def run_full_process(dossier_file, config_file):
         "Link (Streaming - Imagen)", "Menciones - Empresa"
     ]
     
-    df_final = df[df['Mantener'] == 'Conservar'].copy()
+    df_final = df.copy() # Mantener todas las filas
     df_final = df_final.reset_index(drop=True)
 
     st.subheader("📊 Resumen del Proceso")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Filas Totales Procesadas", len(df))
-    dups_count = (df['Mantener'] == 'Eliminar').sum()
-    col2.metric("Duplicados Descartados", dups_count)
-    col3.metric("Filas Finales", len(df_final))
-
-    with st.expander("Ver alertas de calidad de datos"):
-        medios_sin_region = df_final[df_final['Región'].isnull()]['Medio'].unique()
-        if len(medios_sin_region) > 0:
-            st.warning(f"**{len(medios_sin_region)} medios no encontrados en el mapeo de Regiones:**")
-            st.code('\n'.join(medios_sin_region[:10]))
-        else:
-            st.success("Todos los medios fueron mapeados a una región.")
+    col1.metric("Filas Totales", len(df_final))
+    dups_count = (df_final['Mantener'] == 'Eliminar').sum()
+    col2.metric("Filas Marcadas como Duplicadas", dups_count)
+    col3.metric("Filas Únicas", len(df_final) - dups_count)
 
     st.subheader("✍️ Previsualización y Edición de Resultados")
     st.info("Puedes editar los datos directamente en la tabla. Los cambios se guardarán en el archivo descargado.")
     
     final_columns_in_df = [col for col in final_order if col in df_final.columns]
     
-    edited_df = st.data_editor(df_final[final_columns_in_df], num_rows="dynamic", key="final_editor", use_container_width=True)
+    # Preparamos las columnas de link para la edición, mostrando 'Link' si hay URL
+    df_for_editor = df_final[final_columns_in_df].copy()
+    for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
+        if col_name in df_for_editor.columns:
+            df_for_editor[col_name] = df_for_editor[col_name].apply(lambda x: 'Link' if pd.notna(x) else '')
+            
+    edited_df_display = st.data_editor(df_for_editor, num_rows="dynamic", key="final_editor", use_container_width=True)
     
-    excel_data = to_excel_from_df(edited_df, final_order)
+    # Unimos las ediciones con las URLs originales para la descarga
+    df_to_download = edited_df_display.copy()
+    for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
+        if col_name in df_to_download.columns:
+            df_to_download[col_name] = df_final[col_name]
+
+    excel_data = to_excel_from_df(df_to_download, final_order)
     st.download_button(
         label="📥 Descargar Archivo Final Procesado",
         data=excel_data,
@@ -217,7 +252,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.3")
+st.title("🚀 Procesador Inteligente de Dossiers v2.4")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 
 st.info(
