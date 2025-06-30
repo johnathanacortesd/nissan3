@@ -8,7 +8,7 @@ import re
 import nltk
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.5", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v2.6", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -22,7 +22,6 @@ except LookupError:
 # SECCIÓN DE FUNCIONES AUXILIARES
 # ==============================================================================
 def extract_link_from_cell(cell):
-    """Extrae el hipervínculo de una celda de openpyxl."""
     if cell.hyperlink and cell.hyperlink.target:
         return cell.hyperlink.target
     return None
@@ -108,11 +107,8 @@ def run_full_process(dossier_file, config_file):
         mention_map = pd.Series(config_sheets['Menciones'].iloc[:, 1].values, index=config_sheets['Menciones'].iloc[:, 0].astype(str).str.strip()).to_dict()
         final_topic_map = pd.Series(config_sheets['Mapa_Temas'].iloc[:, 1].values, index=config_sheets['Mapa_Temas'].iloc[:, 0].astype(str).str.strip()).to_dict()
         
-    except FileNotFoundError as e:
-        st.error(f"Error: Archivo de modelo no encontrado: {e.filename}. Asegúrate que los archivos .pkl estén en la misma carpeta.")
-        st.stop()
-    except KeyError as e:
-        st.error(f"Error: Falta la hoja '{e}' en `Configuracion.xlsx`.")
+    except Exception as e:
+        st.error(f"Error al cargar archivos: {e}. Revisa que los archivos de modelos (.pkl) y `Configuracion.xlsx` sean correctos.")
         st.stop()
 
     progress_text.info("Paso 2/8: Leyendo Dossier y expandiendo filas...")
@@ -123,15 +119,13 @@ def run_full_process(dossier_file, config_file):
     link_stream_idx = original_headers.index('Link (Streaming - Imagen)') if 'Link (Streaming - Imagen)' in original_headers else -1
 
     rows_to_expand = []
-    for row_idx, row in enumerate(sheet.iter_rows(min_row=2)):
+    for row in sheet.iter_rows(min_row=2):
         if all(c.value is None for c in row): continue
-        
-        row_values = [cell.value for cell in row]
+        row_values = [c.value for c in row]
         row_data = dict(zip(original_headers, row_values))
-
         if link_nota_idx != -1: row_data['Link Nota'] = extract_link_from_cell(row[link_nota_idx])
         if link_stream_idx != -1: row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[link_stream_idx])
-
+        
         menciones = [m.strip() for m in str(row_data.get('Menciones - Empresa') or '').split(';') if m.strip()]
         if not menciones: rows_to_expand.append(row_data)
         else:
@@ -149,15 +143,30 @@ def run_full_process(dossier_file, config_file):
             
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
-
-    # --- INICIO DE LA FUNCIONALIDAD RESTAURADA ---
+    
+    # --- INICIO DE LA FUNCIONALIDAD CRÍTICA RESTAURADA ---
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
-    # --- FIN DE LA FUNCIONALIDAD RESTAURADA ---
-    
+
+    # Lógica de manipulación de links
+    is_internet = df['Tipo de Medio'] == 'Internet'
+    is_print = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
+    is_broadcast = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
+
+    # 1. Intercambiar para Internet
+    df.loc[is_internet, ['Link Nota', 'Link (Streaming - Imagen)']] = df.loc[is_internet, ['Link (Streaming - Imagen)', 'Link Nota']].values
+
+    # 2. Arreglar para Prensa/Revista
+    cond_copy = is_print & df['Link Nota'].isnull() & df['Link (Streaming - Imagen)'].notnull()
+    df.loc[cond_copy, 'Link Nota'] = df.loc[cond_copy, 'Link (Streaming - Imagen)']
+    df.loc[is_print, 'Link (Streaming - Imagen)'] = None
+
+    # 3. Limpiar para Radio/TV
+    df.loc[is_broadcast, 'Link (Streaming - Imagen)'] = None
+    # --- FIN DE LA FUNCIONALIDAD CRÍTICA RESTAURADA ---
+
     df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
-    is_internet = df['Tipo de Medio'].astype(str).str.lower().str.strip() == 'internet'
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
     progress_text.info("Paso 4/8: Detectando y marcando duplicados...")
@@ -166,11 +175,10 @@ def run_full_process(dossier_file, config_file):
     duplicated_mask = df.duplicated(subset=dup_cols, keep='first')
     df.loc[duplicated_mask, 'Mantener'] = 'Eliminar'
     
-    progress_text.info("Paso 5/8: Aplicando modelos de IA para Tono y Tema...")
+    progress_text.info("Paso 5/8: Aplicando modelos de IA...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
     if not df_valid.empty:
         df_valid['texto_para_ia'] = df_valid['Título'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
-        
         X_sent = sentiment_vectorizer.transform(df_valid['texto_para_ia'])
         preds_sent = sentiment_model.predict(X_sent)
         label_map_inv = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo'}
@@ -179,17 +187,16 @@ def run_full_process(dossier_file, config_file):
         df_valid["resumen_procesado"] = df_valid["texto_para_ia"].apply(preprocess_text_for_topic)
         X_tema = topic_vectorizer.transform(df_valid["resumen_procesado"])
         df_valid["Temas Generales - Tema"] = topic_model.predict(X_tema)
-        
         df.update(df_valid[['Tono', 'Temas Generales - Tema']])
 
-    progress_text.info("Paso 6/8: Homogeneizando temas para mayor consistencia...")
+    progress_text.info("Paso 6/8: Homogeneizando temas...")
     df_valid_homog = df[df['Mantener'] == 'Conservar'].copy()
     if not df_valid_homog.empty and 'Temas Generales - Tema' in df_valid_homog.columns:
         homogenized_temas = df_valid_homog.groupby('titulo_norm')['Temas Generales - Tema'].transform(lambda x: x.mode()[0] if not x.mode().empty else x)
         df_valid_homog['Temas Generales - Tema'] = homogenized_temas
         df.update(df_valid_homog[['Temas Generales - Tema']])
 
-    progress_text.info("Paso 7/8: Realizando el mapeo final de Tema...")
+    progress_text.info("Paso 7/8: Mapeando tema final...")
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
 
@@ -200,15 +207,12 @@ def run_full_process(dossier_file, config_file):
     progress_text.success("¡Proceso completado con éxito!")
 
     final_order = [
-        "ID Noticia", "Fecha", "Hora", "Medio", "Tipo de Medio", "Sección - Programa", 
-        "Región", "Título", "Autor - Conductor", "Nro. Pagina", "Dimensión", 
-        "Duración - Nro. Caracteres", "CPE", "Tier", "Audiencia", "Tono", "Tema", 
-        "Temas Generales - Tema", "Resumen - Aclaracion", "Link Nota", 
-        "Link (Streaming - Imagen)", "Menciones - Empresa"
+        "ID Noticia", "Fecha", "Hora", "Medio", "Tipo de Medio", "Sección - Programa", "Región", 
+        "Título", "Autor - Conductor", "Nro. Pagina", "Dimensión", "Duración - Nro. Caracteres", 
+        "CPE", "Tier", "Audiencia", "Tono", "Tema", "Temas Generales - Tema", "Resumen - Aclaracion", 
+        "Link Nota", "Link (Streaming - Imagen)", "Menciones - Empresa"
     ]
-    
     df_final = df.copy()
-    df_final = df_final.reset_index(drop=True)
 
     st.subheader("📊 Resumen del Proceso")
     col1, col2, col3 = st.columns(3)
@@ -217,24 +221,15 @@ def run_full_process(dossier_file, config_file):
     col2.metric("Filas Marcadas como Duplicadas", dups_count)
     col3.metric("Filas Únicas", len(df_final) - dups_count)
 
-    st.subheader("✍️ Previsualización y Edición de Resultados")
-    st.info("Puedes editar los datos directamente en la tabla. Los cambios se guardarán en el archivo descargado.")
-    
+    st.subheader("✍️ Previsualización de Resultados")
     final_columns_in_df = [col for col in final_order if col in df_final.columns]
-    
     df_for_editor = df_final[final_columns_in_df].copy()
     for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
         if col_name in df_for_editor.columns:
             df_for_editor[col_name] = df_for_editor[col_name].apply(lambda x: 'Link' if pd.notna(x) else '')
-            
-    edited_df_display = st.data_editor(df_for_editor, num_rows="dynamic", key="final_editor", use_container_width=True)
+    st.dataframe(df_for_editor, use_container_width=True)
     
-    df_to_download = edited_df_display.copy()
-    for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
-        if col_name in df_to_download.columns:
-            df_to_download[col_name] = df_final[col_name]
-
-    excel_data = to_excel_from_df(df_to_download, final_order)
+    excel_data = to_excel_from_df(df_final, final_order)
     st.download_button(
         label="📥 Descargar Archivo Final Procesado",
         data=excel_data,
@@ -245,7 +240,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.5")
+st.title("🚀 Procesador Inteligente de Dossiers v2.6")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 
 st.info(
@@ -255,7 +250,6 @@ st.info(
     "3. Sube ambos archivos juntos en el área de abajo.\n"
     "4. Haz clic en 'Iniciar Proceso'."
 )
-
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
     st.markdown("""
     Tu archivo `Configuracion.xlsx` debe contener exactamente estas 4 hojas:
@@ -266,30 +260,18 @@ with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
     """)
 
 uploaded_files = st.file_uploader(
-    "Arrastra y suelta tus archivos aquí (Dossier y Configuracion)",
-    type=["xlsx"],
-    accept_multiple_files=True
+    "Arrastra y suelta tus archivos aquí (Dossier y Configuracion)", type=["xlsx"], accept_multiple_files=True
 )
 
-dossier_file = None
-config_file = None
-
+dossier_file, config_file = None, None
 if uploaded_files:
     for file in uploaded_files:
-        if 'config' in file.name.lower():
-            config_file = file
-        else:
-            dossier_file = file
-
-    if dossier_file:
-        st.success(f"Archivo Dossier cargado: **{dossier_file.name}**")
-    else:
-        st.warning("No se ha subido un archivo que parezca ser el Dossier.")
-        
-    if config_file:
-        st.success(f"Archivo de Configuración cargado: **{config_file.name}**")
-    else:
-        st.warning("No se ha subido el archivo `Configuracion.xlsx`.")
+        if 'config' in file.name.lower(): config_file = file
+        else: dossier_file = file
+    if dossier_file: st.success(f"Archivo Dossier cargado: **{dossier_file.name}**")
+    else: st.warning("No se ha subido un archivo que parezca ser el Dossier.")
+    if config_file: st.success(f"Archivo de Configuración cargado: **{config_file.name}**")
+    else: st.warning("No se ha subido el archivo `Configuracion.xlsx`.")
 
 if st.button("▶️ Iniciar Proceso Completo", disabled=not (dossier_file and config_file), type="primary"):
     run_full_process(dossier_file, config_file)
