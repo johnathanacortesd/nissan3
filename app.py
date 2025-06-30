@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
-from collections import defaultdict, Counter
 import datetime
 import io
 import joblib
@@ -9,7 +8,7 @@ import re
 import nltk
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.2", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v2.3", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -22,9 +21,6 @@ except LookupError:
 # ==============================================================================
 # SECCIÓN DE FUNCIONES AUXILIARES
 # ==============================================================================
-def norm_key(text):
-    return re.sub(r'\W+', '', str(text).lower().strip()) if text else ""
-
 def convert_html_entities(text):
     if not isinstance(text, str): return text
     html_entities = {'á': 'á', 'é': 'é', 'í': 'í', 'ó': 'ó', 'ú': 'ú', 'ñ': 'ñ', 'Á': 'Á', 'É': 'É', 'Í': 'Í', 'Ó': 'Ó', 'Ú': 'Ú', 'Ñ': 'Ñ', '\"': '\"', '“': '\"', '”': '\"', '‘': "'", '’': "'", 'Â': '', 'â': '', '€': '', '™': ''}
@@ -59,9 +55,9 @@ def preprocess_text_for_topic(text: str) -> str:
     tokens = token_pattern_re.findall(text.lower())
     return " ".join(tok for tok in tokens if tok not in stop_words_list)
 
-def to_excel_from_df(df, original_headers):
+def to_excel_from_df(df, final_order):
     output = io.BytesIO()
-    final_order = original_headers + [col for col in ['Mantener'] if col in df.columns]
+    # Asegurarse de que todas las columnas existen en el df antes de reordenar
     final_columns_in_df = [col for col in final_order if col in df.columns]
     df_to_excel = df[final_columns_in_df]
     
@@ -124,6 +120,11 @@ def run_full_process(dossier_file, config_file):
     df['Mantener'] = 'Conservar'
 
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
+    # Asegurar que todas las columnas existan, rellenando con None si es necesario
+    for col in original_headers:
+        if col not in df.columns:
+            df[col] = None
+            
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
     
@@ -137,7 +138,6 @@ def run_full_process(dossier_file, config_file):
     dup_cols = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
     df_dups = df[df.duplicated(subset=dup_cols, keep='first')]
     df.loc[df_dups.index, 'Mantener'] = 'Eliminar'
-    df.loc[df_dups.index, ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA para Tono y Tema...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -155,43 +155,44 @@ def run_full_process(dossier_file, config_file):
         
         df.update(df_valid[['Tono', 'Temas Generales - Tema']])
 
-    # --- INICIO DE LA CORRECCIÓN ---
     progress_text.info("Paso 6/8: Homogeneizando temas para mayor consistencia...")
     df_valid_homog = df[df['Mantener'] == 'Conservar'].copy()
-    
     if not df_valid_homog.empty and 'Temas Generales - Tema' in df_valid_homog.columns:
-        # 1. Realizar la homogeneización SÓLO sobre las filas válidas
         homogenized_temas = df_valid_homog.groupby('titulo_norm')['Temas Generales - Tema'].transform(
             lambda x: x.mode()[0] if not x.mode().empty else x
         )
-        # 2. Asignar los temas corregidos a la copia del dataframe válido
         df_valid_homog['Temas Generales - Tema'] = homogenized_temas
-        
-        # 3. Actualizar el DataFrame principal SÓLO con los datos corregidos de las filas válidas
         df.update(df_valid_homog[['Temas Generales - Tema']])
-    # --- FIN DE LA CORRECCIÓN ---
 
     progress_text.info("Paso 7/8: Realizando el mapeo final de Tema...")
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
-        # Limpieza para filas duplicadas, asegurando que Tema también sea 'Duplicada'
-        df.loc[df['Mantener'] == 'Eliminar', 'Tema'] = 'Duplicada'
 
     progress_text.info("Paso 8/8: Generando resultados y estadísticas...")
-    df.drop(columns=['titulo_norm'], inplace=True, errors='ignore')
-    
     st.balloons()
     progress_text.success("¡Proceso completado con éxito!")
+
+    # --- DEFINIR ORDEN FINAL Y FILTRAR ---
+    final_order = [
+        "ID Noticia", "Fecha", "Hora", "Medio", "Tipo de Medio", "Sección - Programa", 
+        "Región", "Título", "Autor - Conductor", "Nro. Pagina", "Dimensión", 
+        "Duración - Nro. Caracteres", "CPE", "Tier", "Audiencia", "Tono", "Tema", 
+        "Temas Generales - Tema", "Resumen - Aclaracion", "Link Nota", 
+        "Link (Streaming - Imagen)", "Menciones - Empresa"
+    ]
+    
+    df_final = df[df['Mantener'] == 'Conservar'].copy()
+    df_final = df_final.reset_index(drop=True)
 
     st.subheader("📊 Resumen del Proceso")
     col1, col2, col3 = st.columns(3)
     col1.metric("Filas Totales Procesadas", len(df))
     dups_count = (df['Mantener'] == 'Eliminar').sum()
-    col2.metric("Duplicados Eliminados", dups_count)
-    col3.metric("Filas Finales", len(df) - dups_count)
+    col2.metric("Duplicados Descartados", dups_count)
+    col3.metric("Filas Finales", len(df_final))
 
     with st.expander("Ver alertas de calidad de datos"):
-        medios_sin_region = df[df['Región'].isnull()]['Medio'].unique()
+        medios_sin_region = df_final[df_final['Región'].isnull()]['Medio'].unique()
         if len(medios_sin_region) > 0:
             st.warning(f"**{len(medios_sin_region)} medios no encontrados en el mapeo de Regiones:**")
             st.code('\n'.join(medios_sin_region[:10]))
@@ -201,12 +202,11 @@ def run_full_process(dossier_file, config_file):
     st.subheader("✍️ Previsualización y Edición de Resultados")
     st.info("Puedes editar los datos directamente en la tabla. Los cambios se guardarán en el archivo descargado.")
     
-    final_display_cols = original_headers + ['Mantener']
-    final_display_cols_in_df = [col for col in final_display_cols if col in df.columns]
+    final_columns_in_df = [col for col in final_order if col in df_final.columns]
     
-    edited_df = st.data_editor(df[final_display_cols_in_df], num_rows="dynamic", key="final_editor", use_container_width=True)
+    edited_df = st.data_editor(df_final[final_columns_in_df], num_rows="dynamic", key="final_editor", use_container_width=True)
     
-    excel_data = to_excel_from_df(edited_df, original_headers)
+    excel_data = to_excel_from_df(edited_df, final_order)
     st.download_button(
         label="📥 Descargar Archivo Final Procesado",
         data=excel_data,
@@ -217,7 +217,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.2")
+st.title("🚀 Procesador Inteligente de Dossiers v2.3")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 
 st.info(
