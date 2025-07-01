@@ -9,7 +9,7 @@ import nltk
 import html
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.9", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v3.0", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -43,7 +43,6 @@ def normalize_title_for_comparison(title):
 def clean_title_for_output(title):
     if not isinstance(title, str): return ""
     title = convert_html_entities(title)
-    # --- LÓGICA MEJORADA: AHORA MANEJA PIPE '|' Y GUIÓN '-' ---
     title = re.sub(r'\s*[|-]\s*[\w\s]+$', '', title).strip()
     return title
 
@@ -68,7 +67,6 @@ def to_excel_from_df(df, final_order):
     output = io.BytesIO()
     final_columns_in_df = [col for col in final_order if col in df.columns]
     df_to_excel = df[final_columns_in_df]
-
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_to_excel.to_excel(writer, index=False, sheet_name='Resultado')
         workbook = writer.book
@@ -152,25 +150,45 @@ def run_full_process(dossier_file, config_file):
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    progress_text.info("Paso 4/8: Detectando y marcando duplicados con prioridad...")
+    progress_text.info("Paso 4/8: Detectando duplicados...")
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
-    dup_cols = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
-    
-    # --- LÓGICA DE PRIORIDAD MEJORADA ---
+    df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
     def get_priority_score(title):
         if not isinstance(title, str): return 0
         if title.startswith('"') and title.endswith('"'): return 2
         if '"' in title or "'" in title: return 1
         return 0
     df['priority_score'] = df['Título'].apply(get_priority_score)
-    sort_by_cols = dup_cols + ['priority_score']
-    ascending_order = [True] * len(dup_cols) + [False]
+    
+    # Etapa 4A: Duplicados Exactos
+    dup_cols_exact = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
+    sort_by_cols = dup_cols_exact + ['priority_score']
+    ascending_order = [True] * len(dup_cols_exact) + [False]
     df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
-    duplicated_mask = df.duplicated(subset=dup_cols, keep='first')
-    df.loc[duplicated_mask, 'Mantener'] = 'Eliminar'
-    df.drop(columns=['priority_score'], inplace=True)
+    exact_duplicates_mask = df.duplicated(subset=dup_cols_exact, keep='first')
+    df.loc[exact_duplicates_mask, 'Mantener'] = 'Eliminar'
     df.sort_index(inplace=True)
-    # --- FIN DE LA LÓGICA DE PRIORIDAD MEJORADA ---
+
+    # Etapa 4B: Duplicados por Fechas Consecutivas (sólo para Internet)
+    df_internet_to_check = df[(df['Mantener'] == 'Conservar') & (df['Tipo de Medio'] == 'Internet')].copy()
+    if not df_internet_to_check.empty:
+        group_cols = ['titulo_norm', 'Medio', 'Menciones - Empresa']
+        # Usamos un truco con cumsum() para crear clusters de fechas consecutivas
+        df_internet_to_check.sort_values(by=group_cols + ['Fecha'], inplace=True)
+        date_diffs = df_internet_to_check.groupby(group_cols)['Fecha'].diff().dt.days
+        # Un nuevo cluster empieza donde la diferencia no es 1 día
+        cluster_ids = (date_diffs != 1).cumsum()
+        df_internet_to_check['date_cluster'] = cluster_ids
+        
+        # Ahora, marcamos duplicados dentro de estos nuevos clusters
+        sort_by_cols_consecutive = group_cols + ['date_cluster', 'priority_score']
+        ascending_order_consecutive = [True] * (len(group_cols) + 1) + [False]
+        df_internet_to_check.sort_values(by=sort_by_cols_consecutive, ascending=ascending_order_consecutive, inplace=True)
+        consecutive_duplicates_mask = df_internet_to_check.duplicated(subset=group_cols + ['date_cluster'], keep='first')
+        
+        # Actualizar la columna 'Mantener' en el DataFrame original
+        indices_to_eliminate = df_internet_to_check[consecutive_duplicates_mask].index
+        df.loc[indices_to_eliminate, 'Mantener'] = 'Eliminar'
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -195,7 +213,6 @@ def run_full_process(dossier_file, config_file):
     progress_text.info("Paso 7/8: Mapeando tema final...")
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
-
     df.loc[df['Mantener'] == 'Eliminar', ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
     
     progress_text.info("Paso 8/8: Generando resultados finales...")
@@ -226,7 +243,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.9")
+st.title("🚀 Procesador Inteligente de Dossiers v3.0")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
