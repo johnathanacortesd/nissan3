@@ -6,10 +6,10 @@ import io
 import joblib
 import re
 import nltk
-import html # <-- LIBRERÍA IMPORTADA PARA LA SOLUCIÓN
+import html
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.8", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v2.9", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -27,35 +27,24 @@ def extract_link_from_cell(cell):
         return cell.hyperlink.target
     return None
 
-# --- INICIO DE LA FUNCIÓN CORREGIDA ---
 def convert_html_entities(text):
-    """Decodifica entidades HTML y maneja reemplazos personalizados."""
     if not isinstance(text, str): return text
-    
-    # 1. Usar la librería estándar para decodificar entidades como í -> í
     text = html.unescape(text)
-    
-    # 2. Manejar reemplazos personalizados adicionales (ej. comillas, caracteres extraños)
-    custom_replacements = {
-        '“': '\"', '”': '\"', '‘': "'", '’': "'",
-        'Â': '', 'â': '', '€': '', '™': ''
-    }
+    custom_replacements = { '“': '\"', '”': '\"', '‘': "'", '’': "'", 'Â': '', 'â': '', '€': '', '™': '' }
     for entity, char in custom_replacements.items():
         text = text.replace(entity, char)
     return text
-# --- FIN DE LA FUNCIÓN CORREGIDA ---
 
 def normalize_title_for_comparison(title):
     if not isinstance(title, str): return ""
-    # Ahora usa la función corregida, garantizando una normalización correcta
     title = convert_html_entities(title)
     return re.sub(r'\W+', ' ', title).lower().strip()
 
 def clean_title_for_output(title):
     if not isinstance(title, str): return ""
-    # Ahora usa la función corregida, garantizando una limpieza correcta
     title = convert_html_entities(title)
-    title = re.sub(r'\s*\|\s*[\w\s]+$', '', title).strip()
+    # --- LÓGICA MEJORADA: AHORA MANEJA PIPE '|' Y GUIÓN '-' ---
+    title = re.sub(r'\s*[|-]\s*[\w\s]+$', '', title).strip()
     return title
 
 def corregir_texto(text):
@@ -84,16 +73,13 @@ def to_excel_from_df(df, final_order):
         df_to_excel.to_excel(writer, index=False, sheet_name='Resultado')
         workbook = writer.book
         worksheet = writer.sheets['Resultado']
-        
         link_format = workbook.add_format({'color': 'blue', 'underline': 1})
-        
         for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
             if col_name in df_to_excel.columns:
                 col_idx = df_to_excel.columns.get_loc(col_name)
                 for row_idx, url in enumerate(df_to_excel[col_name]):
                     if pd.notna(url) and isinstance(url, str) and url.startswith('http'):
                         worksheet.write_url(row_idx + 1, col_idx, url, link_format, 'Link')
-                        
     return output.getvalue()
 
 @st.cache_resource
@@ -116,12 +102,10 @@ def run_full_process(dossier_file, config_file):
     try:
         sentiment_model, sentiment_vectorizer, topic_model, topic_vectorizer = load_ml_models()
         config_sheets = pd.read_excel(config_file.read(), sheet_name=None)
-        
         region_map = pd.Series(config_sheets['Regiones'].iloc[:, 1].values, index=config_sheets['Regiones'].iloc[:, 0].astype(str).str.lower().str.strip()).to_dict()
         internet_map = pd.Series(config_sheets['Internet'].iloc[:, 1].values, index=config_sheets['Internet'].iloc[:, 0].astype(str).str.lower().str.strip()).to_dict()
         mention_map = pd.Series(config_sheets['Menciones'].iloc[:, 1].values, index=config_sheets['Menciones'].iloc[:, 0].astype(str).str.strip()).to_dict()
         final_topic_map = pd.Series(config_sheets['Mapa_Temas'].iloc[:, 1].values, index=config_sheets['Mapa_Temas'].iloc[:, 0].astype(str).str.strip()).to_dict()
-        
     except Exception as e:
         st.error(f"Error al cargar archivos: {e}. Revisa que los archivos de modelos (.pkl) y `Configuracion.xlsx` sean correctos.")
         st.stop()
@@ -132,7 +116,6 @@ def run_full_process(dossier_file, config_file):
     original_headers = [cell.value for cell in sheet[1] if cell.value]
     link_nota_idx = original_headers.index('Link Nota') if 'Link Nota' in original_headers else -1
     link_stream_idx = original_headers.index('Link (Streaming - Imagen)') if 'Link (Streaming - Imagen)' in original_headers else -1
-
     rows_to_expand = []
     for row in sheet.iter_rows(min_row=2):
         if all(c.value is None for c in row): continue
@@ -140,7 +123,6 @@ def run_full_process(dossier_file, config_file):
         row_data = dict(zip(original_headers, row_values))
         if link_nota_idx != -1: row_data['Link Nota'] = extract_link_from_cell(row[link_nota_idx])
         if link_stream_idx != -1: row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[link_stream_idx])
-        
         menciones = [m.strip() for m in str(row_data.get('Menciones - Empresa') or '').split(';') if m.strip()]
         if not menciones: rows_to_expand.append(row_data)
         else:
@@ -148,30 +130,24 @@ def run_full_process(dossier_file, config_file):
                 new_row = row_data.copy()
                 new_row['Menciones - Empresa'] = mencion
                 rows_to_expand.append(new_row)
-    
     df = pd.DataFrame(rows_to_expand)
     df['Mantener'] = 'Conservar'
 
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
     for col in original_headers:
         if col not in df.columns: df[col] = None
-            
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
-    
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
-
     is_internet = df['Tipo de Medio'] == 'Internet'
     is_print = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
     is_broadcast = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
-
     df.loc[is_internet, ['Link Nota', 'Link (Streaming - Imagen)']] = df.loc[is_internet, ['Link (Streaming - Imagen)', 'Link Nota']].values
     cond_copy = is_print & df['Link Nota'].isnull() & df['Link (Streaming - Imagen)'].notnull()
     df.loc[cond_copy, 'Link Nota'] = df.loc[cond_copy, 'Link (Streaming - Imagen)']
     df.loc[is_print, 'Link (Streaming - Imagen)'] = None
     df.loc[is_broadcast, 'Link (Streaming - Imagen)'] = None
-
     df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
@@ -179,15 +155,22 @@ def run_full_process(dossier_file, config_file):
     progress_text.info("Paso 4/8: Detectando y marcando duplicados con prioridad...")
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     dup_cols = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
-
-    df['has_quotes'] = df['Título'].str.contains('["\']', na=False).astype(int)
-    sort_by_cols = dup_cols + ['has_quotes']
+    
+    # --- LÓGICA DE PRIORIDAD MEJORADA ---
+    def get_priority_score(title):
+        if not isinstance(title, str): return 0
+        if title.startswith('"') and title.endswith('"'): return 2
+        if '"' in title or "'" in title: return 1
+        return 0
+    df['priority_score'] = df['Título'].apply(get_priority_score)
+    sort_by_cols = dup_cols + ['priority_score']
     ascending_order = [True] * len(dup_cols) + [False]
     df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
     duplicated_mask = df.duplicated(subset=dup_cols, keep='first')
     df.loc[duplicated_mask, 'Mantener'] = 'Eliminar'
-    df.drop(columns=['has_quotes'], inplace=True)
+    df.drop(columns=['priority_score'], inplace=True)
     df.sort_index(inplace=True)
+    # --- FIN DE LA LÓGICA DE PRIORIDAD MEJORADA ---
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -197,7 +180,6 @@ def run_full_process(dossier_file, config_file):
         preds_sent = sentiment_model.predict(X_sent)
         label_map_inv = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo'}
         df_valid['Tono'] = [label_map_inv.get(p, 'Indefinido') for p in preds_sent]
-        
         df_valid["resumen_procesado"] = df_valid["texto_para_ia"].apply(preprocess_text_for_topic)
         X_tema = topic_vectorizer.transform(df_valid["resumen_procesado"])
         df_valid["Temas Generales - Tema"] = topic_model.predict(X_tema)
@@ -220,12 +202,7 @@ def run_full_process(dossier_file, config_file):
     st.balloons()
     progress_text.success("¡Proceso completado con éxito!")
 
-    final_order = [
-        "ID Noticia", "Fecha", "Hora", "Medio", "Tipo de Medio", "Sección - Programa", "Región", 
-        "Título", "Autor - Conductor", "Nro. Pagina", "Dimensión", "Duración - Nro. Caracteres", 
-        "CPE", "Tier", "Audiencia", "Tono", "Tema", "Temas Generales - Tema", "Resumen - Aclaracion", 
-        "Link Nota", "Link (Streaming - Imagen)", "Menciones - Empresa"
-    ]
+    final_order = ["ID Noticia", "Fecha", "Hora", "Medio", "Tipo de Medio", "Sección - Programa", "Región", "Título", "Autor - Conductor", "Nro. Pagina", "Dimensión", "Duración - Nro. Caracteres", "CPE", "Tier", "Audiencia", "Tono", "Tema", "Temas Generales - Tema", "Resumen - Aclaracion", "Link Nota", "Link (Streaming - Imagen)", "Menciones - Empresa"]
     df_final = df.copy()
 
     st.subheader("📊 Resumen del Proceso")
@@ -244,39 +221,18 @@ def run_full_process(dossier_file, config_file):
     st.dataframe(df_for_editor, use_container_width=True)
     
     excel_data = to_excel_from_df(df_final, final_order)
-    st.download_button(
-        label="📥 Descargar Archivo Final Procesado",
-        data=excel_data,
-        file_name=f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    st.download_button(label="📥 Descargar Archivo Final Procesado", data=excel_data, file_name=f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.8")
+st.title("🚀 Procesador Inteligente de Dossiers v2.9")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
-
-st.info(
-    "**Instrucciones:**\n\n"
-    "1. Prepara tu archivo **Dossier** principal en formato `.xlsx`.\n"
-    "2. Prepara tu archivo de mapeos llamado **`Configuracion.xlsx`**.\n"
-    "3. Sube ambos archivos juntos en el área de abajo.\n"
-    "4. Haz clic en 'Iniciar Proceso'."
-)
+st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
-    st.markdown("""
-    Tu archivo `Configuracion.xlsx` debe contener exactamente estas 4 hojas:
-    - **`Regiones`**: Columna A (Medio), Columna B (Región).
-    - **`Internet`**: Columna A (Medio Original), Columna B (Medio Mapeado).
-    - **`Menciones`**: Columna A (Mención Original), Columna B (Mención Mapeada).
-    - **`Mapa_Temas`**: Columna A (Temas Generales - Tema), Columna B (Tema).
-    """)
+    st.markdown("- **`Regiones`**: Columna A (Medio), Columna B (Región).\n- **`Internet`**: Columna A (Medio Original), Columna B (Medio Mapeado).\n- **`Menciones`**: Columna A (Mención Original), Columna B (Mención Mapeada).\n- **`Mapa_Temas`**: Columna A (Temas Generales - Tema), Columna B (Tema).")
 
-uploaded_files = st.file_uploader(
-    "Arrastra y suelta tus archivos aquí (Dossier y Configuracion)", type=["xlsx"], accept_multiple_files=True
-)
-
+uploaded_files = st.file_uploader("Arrastra y suelta tus archivos aquí (Dossier y Configuracion)", type=["xlsx"], accept_multiple_files=True)
 dossier_file, config_file = None, None
 if uploaded_files:
     for file in uploaded_files:
@@ -286,6 +242,5 @@ if uploaded_files:
     else: st.warning("No se ha subido un archivo que parezca ser el Dossier.")
     if config_file: st.success(f"Archivo de Configuración cargado: **{config_file.name}**")
     else: st.warning("No se ha subido el archivo `Configuracion.xlsx`.")
-
 if st.button("▶️ Iniciar Proceso Completo", disabled=not (dossier_file and config_file), type="primary"):
     run_full_process(dossier_file, config_file)
