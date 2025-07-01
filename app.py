@@ -8,7 +8,7 @@ import re
 import nltk
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.6", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v2.7", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -144,36 +144,44 @@ def run_full_process(dossier_file, config_file):
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
     
-    # --- INICIO DE LA FUNCIONALIDAD CRÍTICA RESTAURADA ---
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
 
-    # Lógica de manipulación de links
     is_internet = df['Tipo de Medio'] == 'Internet'
     is_print = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
     is_broadcast = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
 
-    # 1. Intercambiar para Internet
     df.loc[is_internet, ['Link Nota', 'Link (Streaming - Imagen)']] = df.loc[is_internet, ['Link (Streaming - Imagen)', 'Link Nota']].values
-
-    # 2. Arreglar para Prensa/Revista
     cond_copy = is_print & df['Link Nota'].isnull() & df['Link (Streaming - Imagen)'].notnull()
     df.loc[cond_copy, 'Link Nota'] = df.loc[cond_copy, 'Link (Streaming - Imagen)']
     df.loc[is_print, 'Link (Streaming - Imagen)'] = None
-
-    # 3. Limpiar para Radio/TV
     df.loc[is_broadcast, 'Link (Streaming - Imagen)'] = None
-    # --- FIN DE LA FUNCIONALIDAD CRÍTICA RESTAURADA ---
 
     df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    progress_text.info("Paso 4/8: Detectando y marcando duplicados...")
+    # --- INICIO DE LA CORRECCIÓN DE DEDUPLICACIÓN ---
+    progress_text.info("Paso 4/8: Detectando y marcando duplicados con prioridad...")
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     dup_cols = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
+
+    # 1. Crear columna de prioridad (1 si tiene comillas, 0 si no)
+    df['has_quotes'] = df['Título'].str.contains('["\']', na=False).astype(int)
+
+    # 2. Ordenar para que las filas con comillas queden primeras en su grupo
+    sort_by_cols = dup_cols + ['has_quotes']
+    ascending_order = [True] * len(dup_cols) + [False] # Ordenar por has_quotes DESC
+    df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
+
+    # 3. Marcar duplicados (ahora `keep='first'` respeta nuestra prioridad)
     duplicated_mask = df.duplicated(subset=dup_cols, keep='first')
     df.loc[duplicated_mask, 'Mantener'] = 'Eliminar'
+
+    # 4. Limpiar y restaurar orden original
+    df.drop(columns=['has_quotes'], inplace=True)
+    df.sort_index(inplace=True)
+    # --- FIN DE LA CORRECCIÓN DE DEDUPLICACIÓN ---
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -240,7 +248,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.6")
+st.title("🚀 Procesador Inteligente de Dossiers v2.7")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 
 st.info(
