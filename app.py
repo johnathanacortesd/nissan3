@@ -7,9 +7,10 @@ import joblib
 import re
 import nltk
 import html
+import numpy as np
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v3.3", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v3.4", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -155,10 +156,11 @@ def run_full_process(dossier_file, config_file):
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce').dt.normalize()
     
-    # --- INICIO DE LA LÓGICA DE PRIORIDAD DEFINITIVA ---
+    # --- INICIO DE LA LÓGICA DE PRIORIDAD Y DUPLICACIÓN DEFINITIVA ---
     df['seccion_priority'] = df['Sección - Programa'].isnull() | (df['Sección - Programa'] == '')
+    df['dup_hora'] = np.where(df['Tipo de Medio'] == 'Internet', 'IGNORE_TIME', df['Hora'])
     
-    dup_cols_exact = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
+    dup_cols_exact = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa', 'dup_hora']
     sort_by_cols = dup_cols_exact + ['seccion_priority']
     ascending_order = [True] * len(dup_cols_exact) + [False]
     df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
@@ -179,7 +181,8 @@ def run_full_process(dossier_file, config_file):
         consecutive_duplicates_mask = df_internet_to_check.duplicated(subset=group_cols + ['date_cluster'], keep='first')
         indices_to_eliminate = df_internet_to_check[consecutive_duplicates_mask].index
         df.loc[indices_to_eliminate, 'Mantener'] = 'Eliminar'
-    # --- FIN DE LA LÓGICA DE PRIORIDAD DEFINITIVA ---
+    df.drop(columns=['dup_hora', 'seccion_priority'], inplace=True)
+    # --- FIN DE LA LÓGICA DE PRIORIDAD Y DUPLICACIÓN DEFINITIVA ---
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -236,7 +239,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v3.3")
+st.title("🚀 Procesador Inteligente de Dossiers v3.4")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
