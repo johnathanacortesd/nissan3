@@ -9,7 +9,7 @@ import nltk
 import html
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v3.2", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v3.3", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -70,7 +70,7 @@ def to_excel_from_df(df, final_order):
     with pd.ExcelWriter(
         output,
         engine='xlsxwriter',
-        datetime_format='dd/mm/yyyy', # --- SOLUCIÓN: FORMATO DE FECHA DEFINITIVO ---
+        datetime_format='dd/mm/yyyy',
         date_format='dd/mm/yyyy'
     ) as writer:
         df_to_excel.to_excel(writer, index=False, sheet_name='Resultado')
@@ -122,7 +122,6 @@ def run_full_process(dossier_file, config_file):
         if all(c.value is None for c in row): continue
         row_values = [c.value for c in row]
         row_data = dict(zip(original_headers, row_values))
-        row_data['original_title_text'] = row_data.get('Título', '')
         if 'Link Nota' in original_headers: row_data['Link Nota'] = extract_link_from_cell(row[original_headers.index('Link Nota')])
         if 'Link (Streaming - Imagen)' in original_headers: row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[original_headers.index('Link (Streaming - Imagen)')])
         menciones = [m.strip() for m in str(row_data.get('Menciones - Empresa') or '').split(';') if m.strip()]
@@ -136,8 +135,7 @@ def run_full_process(dossier_file, config_file):
     df['Mantener'] = 'Conservar'
 
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
-    df['is_title_clean'] = ~df['original_title_text'].astype(str).str.contains(r'&\w+;|&#\d+;', na=False)
-    df['Título'] = df['original_title_text'].astype(str).apply(clean_title_for_output)
+    df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
@@ -157,19 +155,11 @@ def run_full_process(dossier_file, config_file):
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce').dt.normalize()
     
-    # --- INICIO DE LA LÓGICA DE PRIORIDAD CORREGIDA ---
-    def get_priority_score(row):
-        title = row['original_title_text']
-        is_clean = row['is_title_clean']
-        if not isinstance(title, str): return 0
-        quotes_score = 0
-        if title.startswith('"') and title.endswith('"'): quotes_score = 2
-        elif '"' in title or "'" in title: quotes_score = 1
-        return (quotes_score * 10) + int(is_clean) # Pondera comillas por 10 y suma 1 si es limpio
-    df['priority_score'] = df.apply(get_priority_score, axis=1)
+    # --- INICIO DE LA LÓGICA DE PRIORIDAD DEFINITIVA ---
+    df['seccion_priority'] = df['Sección - Programa'].isnull() | (df['Sección - Programa'] == '')
     
     dup_cols_exact = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
-    sort_by_cols = dup_cols_exact + ['priority_score']
+    sort_by_cols = dup_cols_exact + ['seccion_priority']
     ascending_order = [True] * len(dup_cols_exact) + [False]
     df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
     exact_duplicates_mask = df.duplicated(subset=dup_cols_exact, keep='first')
@@ -183,12 +173,13 @@ def run_full_process(dossier_file, config_file):
         date_diffs = df_internet_to_check.groupby(group_cols)['Fecha'].diff().dt.days
         cluster_ids = (date_diffs != 1).cumsum()
         df_internet_to_check['date_cluster'] = cluster_ids
-        sort_by_cols_consecutive = group_cols + ['date_cluster', 'priority_score']
+        sort_by_cols_consecutive = group_cols + ['date_cluster', 'seccion_priority']
         ascending_order_consecutive = [True] * (len(group_cols) + 1) + [False]
         df_internet_to_check.sort_values(by=sort_by_cols_consecutive, ascending=ascending_order_consecutive, inplace=True)
         consecutive_duplicates_mask = df_internet_to_check.duplicated(subset=group_cols + ['date_cluster'], keep='first')
         indices_to_eliminate = df_internet_to_check[consecutive_duplicates_mask].index
         df.loc[indices_to_eliminate, 'Mantener'] = 'Eliminar'
+    # --- FIN DE LA LÓGICA DE PRIORIDAD DEFINITIVA ---
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -230,7 +221,7 @@ def run_full_process(dossier_file, config_file):
     col3.metric("Filas Únicas", len(df_final) - dups_count)
     
     excel_data = to_excel_from_df(df_final, final_order)
-    st.download_button(label="📥 Descargar Archivo Final Procesado", data=excel_data, file_name=f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button(label="📥 Descargar Archivo Final Procesado", data=excel_data, file_name=f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.sheet")
 
     st.subheader("✍️ Previsualización de Resultados")
     final_columns_in_df = [col for col in final_order if col in df_final.columns]
@@ -245,7 +236,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v3.2")
+st.title("🚀 Procesador Inteligente de Dossiers v3.3")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
