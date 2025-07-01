@@ -72,7 +72,6 @@ def to_excel_from_df(df, final_order):
         workbook = writer.book
         worksheet = writer.sheets['Resultado']
         link_format = workbook.add_format({'color': 'blue', 'underline': 1})
-        # --- NUEVO: Formato de Fecha ---
         date_format = workbook.add_format({'num_format': 'dd/mm/yyyy'})
         
         for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
@@ -125,8 +124,7 @@ def run_full_process(dossier_file, config_file):
         if all(c.value is None for c in row): continue
         row_values = [c.value for c in row]
         row_data = dict(zip(original_headers, row_values))
-        # Guardar estado original del título ANTES de cualquier limpieza
-        row_data['original_title'] = row_data['Título']
+        row_data['original_title_text'] = row_data.get('Título', '')
         if 'Link Nota' in original_headers: row_data['Link Nota'] = extract_link_from_cell(row[original_headers.index('Link Nota')])
         if 'Link (Streaming - Imagen)' in original_headers: row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[original_headers.index('Link (Streaming - Imagen)')])
         menciones = [m.strip() for m in str(row_data.get('Menciones - Empresa') or '').split(';') if m.strip()]
@@ -140,8 +138,7 @@ def run_full_process(dossier_file, config_file):
     df['Mantener'] = 'Conservar'
 
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
-    df['is_title_clean'] = ~df['original_title'].astype(str).str.contains(r'&\w+;|&#\d+;', na=False)
-    df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
+    df['Título'] = df['original_title_text'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
@@ -159,17 +156,22 @@ def run_full_process(dossier_file, config_file):
 
     progress_text.info("Paso 4/8: Detectando duplicados con lógica de prioridad...")
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
-    df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
-    def get_quotes_priority_score(title):
+    df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce').dt.normalize()
+    
+    # --- INICIO DE LA LÓGICA DE PRIORIDAD CORREGIDA ---
+    def get_priority_score(row):
+        title = row['original_title_text']
         if not isinstance(title, str): return 0
-        if title.startswith('"') and title.endswith('"'): return 2
-        if '"' in title or "'" in title: return 1
-        return 0
-    df['quotes_priority'] = df['original_title'].apply(get_quotes_priority_score)
+        quotes_score = 0
+        if title.startswith('"') and title.endswith('"'): quotes_score = 2
+        elif '"' in title or "'" in title: quotes_score = 1
+        is_clean_score = int(not re.search(r'&\w+;|&#\d+;', title))
+        return (quotes_score * 10) + is_clean_score
+    df['priority_score'] = df.apply(get_priority_score, axis=1)
     
     dup_cols_exact = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
-    sort_by_cols = dup_cols_exact + ['quotes_priority', 'is_title_clean']
-    ascending_order = [True] * len(dup_cols_exact) + [False, False]
+    sort_by_cols = dup_cols_exact + ['priority_score']
+    ascending_order = [True] * len(dup_cols_exact) + [False]
     df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
     exact_duplicates_mask = df.duplicated(subset=dup_cols_exact, keep='first')
     df.loc[exact_duplicates_mask, 'Mantener'] = 'Eliminar'
@@ -182,8 +184,8 @@ def run_full_process(dossier_file, config_file):
         date_diffs = df_internet_to_check.groupby(group_cols)['Fecha'].diff().dt.days
         cluster_ids = (date_diffs != 1).cumsum()
         df_internet_to_check['date_cluster'] = cluster_ids
-        sort_by_cols_consecutive = group_cols + ['date_cluster', 'quotes_priority', 'is_title_clean']
-        ascending_order_consecutive = [True] * (len(group_cols) + 1) + [False, False]
+        sort_by_cols_consecutive = group_cols + ['date_cluster', 'priority_score']
+        ascending_order_consecutive = [True] * (len(group_cols) + 1) + [False]
         df_internet_to_check.sort_values(by=sort_by_cols_consecutive, ascending=ascending_order_consecutive, inplace=True)
         consecutive_duplicates_mask = df_internet_to_check.duplicated(subset=group_cols + ['date_cluster'], keep='first')
         indices_to_eliminate = df_internet_to_check[consecutive_duplicates_mask].index
@@ -228,7 +230,6 @@ def run_full_process(dossier_file, config_file):
     col2.metric("Filas Marcadas como Duplicadas", dups_count)
     col3.metric("Filas Únicas", len(df_final) - dups_count)
     
-    # Reposicionado el botón de descarga
     excel_data = to_excel_from_df(df_final, final_order)
     st.download_button(label="📥 Descargar Archivo Final Procesado", data=excel_data, file_name=f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -236,7 +237,7 @@ def run_full_process(dossier_file, config_file):
     final_columns_in_df = [col for col in final_order if col in df_final.columns]
     df_for_editor = df_final[final_columns_in_df].copy()
     if 'Fecha' in df_for_editor.columns:
-        df_for_editor['Fecha'] = df_for_editor['Fecha'].dt.strftime('%d/%m/%Y').replace('NaT', '')
+        df_for_editor['Fecha'] = pd.to_datetime(df_for_editor['Fecha']).dt.strftime('%d/%m/%Y').replace('NaT', '')
     for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
         if col_name in df_for_editor.columns:
             df_for_editor[col_name] = df_for_editor[col_name].apply(lambda x: 'Link' if pd.notna(x) else '')
