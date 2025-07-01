@@ -157,16 +157,20 @@ def run_full_process(dossier_file, config_file):
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce').dt.normalize()
     
-    def get_quotes_priority_score(title):
+    # --- INICIO DE LA LÓGICA DE PRIORIDAD CORREGIDA ---
+    def get_priority_score(row):
+        title = row['original_title_text']
+        is_clean = row['is_title_clean']
         if not isinstance(title, str): return 0
-        if title.startswith('"') and title.endswith('"'): return 2
-        if '"' in title or "'" in title: return 1
-        return 0
-    df['quotes_priority'] = df['original_title_text'].apply(get_quotes_priority_score)
+        quotes_score = 0
+        if title.startswith('"') and title.endswith('"'): quotes_score = 2
+        elif '"' in title or "'" in title: quotes_score = 1
+        return (quotes_score * 10) + int(is_clean) # Pondera comillas por 10 y suma 1 si es limpio
+    df['priority_score'] = df.apply(get_priority_score, axis=1)
     
     dup_cols_exact = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
-    sort_by_cols = dup_cols_exact + ['quotes_priority', 'is_title_clean']
-    ascending_order = [True] * len(dup_cols_exact) + [False, False]
+    sort_by_cols = dup_cols_exact + ['priority_score']
+    ascending_order = [True] * len(dup_cols_exact) + [False]
     df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
     exact_duplicates_mask = df.duplicated(subset=dup_cols_exact, keep='first')
     df.loc[exact_duplicates_mask, 'Mantener'] = 'Eliminar'
@@ -179,8 +183,8 @@ def run_full_process(dossier_file, config_file):
         date_diffs = df_internet_to_check.groupby(group_cols)['Fecha'].diff().dt.days
         cluster_ids = (date_diffs != 1).cumsum()
         df_internet_to_check['date_cluster'] = cluster_ids
-        sort_by_cols_consecutive = group_cols + ['date_cluster', 'quotes_priority', 'is_title_clean']
-        ascending_order_consecutive = [True] * (len(group_cols) + 1) + [False, False]
+        sort_by_cols_consecutive = group_cols + ['date_cluster', 'priority_score']
+        ascending_order_consecutive = [True] * (len(group_cols) + 1) + [False]
         df_internet_to_check.sort_values(by=sort_by_cols_consecutive, ascending=ascending_order_consecutive, inplace=True)
         consecutive_duplicates_mask = df_internet_to_check.duplicated(subset=group_cols + ['date_cluster'], keep='first')
         indices_to_eliminate = df_internet_to_check[consecutive_duplicates_mask].index
