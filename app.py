@@ -6,9 +6,10 @@ import io
 import joblib
 import re
 import nltk
+import html # <-- LIBRERÍA IMPORTADA PARA LA SOLUCIÓN
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v2.7", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v2.8", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -26,19 +27,33 @@ def extract_link_from_cell(cell):
         return cell.hyperlink.target
     return None
 
+# --- INICIO DE LA FUNCIÓN CORREGIDA ---
 def convert_html_entities(text):
+    """Decodifica entidades HTML y maneja reemplazos personalizados."""
     if not isinstance(text, str): return text
-    html_entities = {'á': 'á', 'é': 'é', 'í': 'í', 'ó': 'ó', 'ú': 'ú', 'ñ': 'ñ', 'Á': 'Á', 'É': 'É', 'Í': 'Í', 'Ó': 'Ó', 'Ú': 'Ú', 'Ñ': 'Ñ', '\"': '\"', '“': '\"', '”': '\"', '‘': "'", '’': "'", 'Â': '', 'â': '', '€': '', '™': ''}
-    for entity, char in html_entities.items(): text = text.replace(entity, char)
+    
+    # 1. Usar la librería estándar para decodificar entidades como í -> í
+    text = html.unescape(text)
+    
+    # 2. Manejar reemplazos personalizados adicionales (ej. comillas, caracteres extraños)
+    custom_replacements = {
+        '“': '\"', '”': '\"', '‘': "'", '’': "'",
+        'Â': '', 'â': '', '€': '', '™': ''
+    }
+    for entity, char in custom_replacements.items():
+        text = text.replace(entity, char)
     return text
+# --- FIN DE LA FUNCIÓN CORREGIDA ---
 
 def normalize_title_for_comparison(title):
     if not isinstance(title, str): return ""
+    # Ahora usa la función corregida, garantizando una normalización correcta
     title = convert_html_entities(title)
     return re.sub(r'\W+', ' ', title).lower().strip()
 
 def clean_title_for_output(title):
     if not isinstance(title, str): return ""
+    # Ahora usa la función corregida, garantizando una limpieza correcta
     title = convert_html_entities(title)
     title = re.sub(r'\s*\|\s*[\w\s]+$', '', title).strip()
     return title
@@ -161,27 +176,18 @@ def run_full_process(dossier_file, config_file):
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    # --- INICIO DE LA CORRECCIÓN DE DEDUPLICACIÓN ---
     progress_text.info("Paso 4/8: Detectando y marcando duplicados con prioridad...")
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     dup_cols = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
 
-    # 1. Crear columna de prioridad (1 si tiene comillas, 0 si no)
     df['has_quotes'] = df['Título'].str.contains('["\']', na=False).astype(int)
-
-    # 2. Ordenar para que las filas con comillas queden primeras en su grupo
     sort_by_cols = dup_cols + ['has_quotes']
-    ascending_order = [True] * len(dup_cols) + [False] # Ordenar por has_quotes DESC
+    ascending_order = [True] * len(dup_cols) + [False]
     df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
-
-    # 3. Marcar duplicados (ahora `keep='first'` respeta nuestra prioridad)
     duplicated_mask = df.duplicated(subset=dup_cols, keep='first')
     df.loc[duplicated_mask, 'Mantener'] = 'Eliminar'
-
-    # 4. Limpiar y restaurar orden original
     df.drop(columns=['has_quotes'], inplace=True)
     df.sort_index(inplace=True)
-    # --- FIN DE LA CORRECCIÓN DE DEDUPLICACIÓN ---
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -248,7 +254,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v2.7")
+st.title("🚀 Procesador Inteligente de Dossiers v2.8")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 
 st.info(
