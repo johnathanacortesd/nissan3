@@ -67,24 +67,22 @@ def to_excel_from_df(df, final_order):
     output = io.BytesIO()
     final_columns_in_df = [col for col in final_order if col in df.columns]
     df_to_excel = df[final_columns_in_df]
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    with pd.ExcelWriter(
+        output,
+        engine='xlsxwriter',
+        datetime_format='dd/mm/yyyy', # --- SOLUCIÓN: FORMATO DE FECHA DEFINITIVO ---
+        date_format='dd/mm/yyyy'
+    ) as writer:
         df_to_excel.to_excel(writer, index=False, sheet_name='Resultado')
         workbook = writer.book
         worksheet = writer.sheets['Resultado']
         link_format = workbook.add_format({'color': 'blue', 'underline': 1})
-        date_format = workbook.add_format({'num_format': 'dd/mm/yyyy'})
-        
         for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
             if col_name in df_to_excel.columns:
                 col_idx = df_to_excel.columns.get_loc(col_name)
                 for row_idx, url in enumerate(df_to_excel[col_name]):
                     if pd.notna(url) and isinstance(url, str) and url.startswith('http'):
                         worksheet.write_url(row_idx + 1, col_idx, url, link_format, 'Link')
-        
-        if 'Fecha' in df_to_excel.columns:
-            date_col_idx = df_to_excel.columns.get_loc('Fecha')
-            worksheet.set_column(date_col_idx, date_col_idx, 12, date_format)
-
     return output.getvalue()
 
 @st.cache_resource
@@ -138,6 +136,7 @@ def run_full_process(dossier_file, config_file):
     df['Mantener'] = 'Conservar'
 
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
+    df['is_title_clean'] = ~df['original_title_text'].astype(str).str.contains(r'&\w+;|&#\d+;', na=False)
     df['Título'] = df['original_title_text'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
@@ -158,20 +157,16 @@ def run_full_process(dossier_file, config_file):
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce').dt.normalize()
     
-    # --- INICIO DE LA LÓGICA DE PRIORIDAD CORREGIDA ---
-    def get_priority_score(row):
-        title = row['original_title_text']
+    def get_quotes_priority_score(title):
         if not isinstance(title, str): return 0
-        quotes_score = 0
-        if title.startswith('"') and title.endswith('"'): quotes_score = 2
-        elif '"' in title or "'" in title: quotes_score = 1
-        is_clean_score = int(not re.search(r'&\w+;|&#\d+;', title))
-        return (quotes_score * 10) + is_clean_score
-    df['priority_score'] = df.apply(get_priority_score, axis=1)
+        if title.startswith('"') and title.endswith('"'): return 2
+        if '"' in title or "'" in title: return 1
+        return 0
+    df['quotes_priority'] = df['original_title_text'].apply(get_quotes_priority_score)
     
     dup_cols_exact = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
-    sort_by_cols = dup_cols_exact + ['priority_score']
-    ascending_order = [True] * len(dup_cols_exact) + [False]
+    sort_by_cols = dup_cols_exact + ['quotes_priority', 'is_title_clean']
+    ascending_order = [True] * len(dup_cols_exact) + [False, False]
     df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
     exact_duplicates_mask = df.duplicated(subset=dup_cols_exact, keep='first')
     df.loc[exact_duplicates_mask, 'Mantener'] = 'Eliminar'
@@ -184,8 +179,8 @@ def run_full_process(dossier_file, config_file):
         date_diffs = df_internet_to_check.groupby(group_cols)['Fecha'].diff().dt.days
         cluster_ids = (date_diffs != 1).cumsum()
         df_internet_to_check['date_cluster'] = cluster_ids
-        sort_by_cols_consecutive = group_cols + ['date_cluster', 'priority_score']
-        ascending_order_consecutive = [True] * (len(group_cols) + 1) + [False]
+        sort_by_cols_consecutive = group_cols + ['date_cluster', 'quotes_priority', 'is_title_clean']
+        ascending_order_consecutive = [True] * (len(group_cols) + 1) + [False, False]
         df_internet_to_check.sort_values(by=sort_by_cols_consecutive, ascending=ascending_order_consecutive, inplace=True)
         consecutive_duplicates_mask = df_internet_to_check.duplicated(subset=group_cols + ['date_cluster'], keep='first')
         indices_to_eliminate = df_internet_to_check[consecutive_duplicates_mask].index
