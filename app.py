@@ -9,7 +9,7 @@ import nltk
 import html
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v3.1", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v3.2", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -72,12 +72,20 @@ def to_excel_from_df(df, final_order):
         workbook = writer.book
         worksheet = writer.sheets['Resultado']
         link_format = workbook.add_format({'color': 'blue', 'underline': 1})
+        # --- NUEVO: Formato de Fecha ---
+        date_format = workbook.add_format({'num_format': 'dd/mm/yyyy'})
+        
         for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
             if col_name in df_to_excel.columns:
                 col_idx = df_to_excel.columns.get_loc(col_name)
                 for row_idx, url in enumerate(df_to_excel[col_name]):
                     if pd.notna(url) and isinstance(url, str) and url.startswith('http'):
                         worksheet.write_url(row_idx + 1, col_idx, url, link_format, 'Link')
+        
+        if 'Fecha' in df_to_excel.columns:
+            date_col_idx = df_to_excel.columns.get_loc('Fecha')
+            worksheet.set_column(date_col_idx, date_col_idx, 12, date_format)
+
     return output.getvalue()
 
 @st.cache_resource
@@ -112,15 +120,15 @@ def run_full_process(dossier_file, config_file):
     wb = load_workbook(dossier_file)
     sheet = wb.active
     original_headers = [cell.value for cell in sheet[1] if cell.value]
-    link_nota_idx = original_headers.index('Link Nota') if 'Link Nota' in original_headers else -1
-    link_stream_idx = original_headers.index('Link (Streaming - Imagen)') if 'Link (Streaming - Imagen)' in original_headers else -1
     rows_to_expand = []
     for row in sheet.iter_rows(min_row=2):
         if all(c.value is None for c in row): continue
         row_values = [c.value for c in row]
         row_data = dict(zip(original_headers, row_values))
-        if link_nota_idx != -1: row_data['Link Nota'] = extract_link_from_cell(row[link_nota_idx])
-        if link_stream_idx != -1: row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[link_stream_idx])
+        # Guardar estado original del título ANTES de cualquier limpieza
+        row_data['original_title'] = row_data['Título']
+        if 'Link Nota' in original_headers: row_data['Link Nota'] = extract_link_from_cell(row[original_headers.index('Link Nota')])
+        if 'Link (Streaming - Imagen)' in original_headers: row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[original_headers.index('Link (Streaming - Imagen)')])
         menciones = [m.strip() for m in str(row_data.get('Menciones - Empresa') or '').split(';') if m.strip()]
         if not menciones: rows_to_expand.append(row_data)
         else:
@@ -132,17 +140,9 @@ def run_full_process(dossier_file, config_file):
     df['Mantener'] = 'Conservar'
 
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
-    for col in original_headers:
-        if col not in df.columns: df[col] = None
-
-    # --- INICIO DE LA LÓGICA DE DEDUPLICACIÓN MULTINIVEL ---
-    # 1. Guardar estado original del título antes de limpiarlo
-    df['is_title_clean'] = ~df['Título'].astype(str).str.contains(r'&\w+;|&#\d+;', na=False)
-    
-    # 2. Limpiar títulos para el output y normalizarlos para comparación
+    df['is_title_clean'] = ~df['original_title'].astype(str).str.contains(r'&\w+;|&#\d+;', na=False)
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
-    
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
     is_internet = df['Tipo de Medio'] == 'Internet'
@@ -157,28 +157,24 @@ def run_full_process(dossier_file, config_file):
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    progress_text.info("Paso 4/8: Detectando duplicados...")
+    progress_text.info("Paso 4/8: Detectando duplicados con lógica de prioridad...")
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
     df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
-    
-    # 3. Crear puntuación de prioridad por comillas
     def get_quotes_priority_score(title):
         if not isinstance(title, str): return 0
         if title.startswith('"') and title.endswith('"'): return 2
         if '"' in title or "'" in title: return 1
         return 0
-    df['quotes_priority'] = df['Título'].apply(get_quotes_priority_score)
-
-    # 4. Ordenar con la jerarquía de prioridad y marcar duplicados
+    df['quotes_priority'] = df['original_title'].apply(get_quotes_priority_score)
+    
     dup_cols_exact = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa']
     sort_by_cols = dup_cols_exact + ['quotes_priority', 'is_title_clean']
-    ascending_order = [True] * len(dup_cols_exact) + [False, False] # Prioridad más alta primero
+    ascending_order = [True] * len(dup_cols_exact) + [False, False]
     df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
     exact_duplicates_mask = df.duplicated(subset=dup_cols_exact, keep='first')
     df.loc[exact_duplicates_mask, 'Mantener'] = 'Eliminar'
     df.sort_index(inplace=True)
     
-    # Etapa de duplicados por fechas consecutivas (ya hereda la priorización)
     df_internet_to_check = df[(df['Mantener'] == 'Conservar') & (is_internet)].copy()
     if not df_internet_to_check.empty:
         group_cols = ['titulo_norm', 'Medio', 'Menciones - Empresa']
@@ -192,9 +188,6 @@ def run_full_process(dossier_file, config_file):
         consecutive_duplicates_mask = df_internet_to_check.duplicated(subset=group_cols + ['date_cluster'], keep='first')
         indices_to_eliminate = df_internet_to_check[consecutive_duplicates_mask].index
         df.loc[indices_to_eliminate, 'Mantener'] = 'Eliminar'
-    
-    df.drop(columns=['is_title_clean', 'quotes_priority'], inplace=True)
-    # --- FIN DE LA LÓGICA DE DEDUPLICACIÓN ---
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -234,22 +227,25 @@ def run_full_process(dossier_file, config_file):
     dups_count = (df_final['Mantener'] == 'Eliminar').sum()
     col2.metric("Filas Marcadas como Duplicadas", dups_count)
     col3.metric("Filas Únicas", len(df_final) - dups_count)
+    
+    # Reposicionado el botón de descarga
+    excel_data = to_excel_from_df(df_final, final_order)
+    st.download_button(label="📥 Descargar Archivo Final Procesado", data=excel_data, file_name=f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     st.subheader("✍️ Previsualización de Resultados")
     final_columns_in_df = [col for col in final_order if col in df_final.columns]
     df_for_editor = df_final[final_columns_in_df].copy()
+    if 'Fecha' in df_for_editor.columns:
+        df_for_editor['Fecha'] = df_for_editor['Fecha'].dt.strftime('%d/%m/%Y').replace('NaT', '')
     for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
         if col_name in df_for_editor.columns:
             df_for_editor[col_name] = df_for_editor[col_name].apply(lambda x: 'Link' if pd.notna(x) else '')
     st.dataframe(df_for_editor, use_container_width=True)
     
-    excel_data = to_excel_from_df(df_final, final_order)
-    st.download_button(label="📥 Descargar Archivo Final Procesado", data=excel_data, file_name=f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v3.1")
+st.title("🚀 Procesador Inteligente de Dossiers v3.2")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
