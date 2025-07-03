@@ -10,7 +10,7 @@ import html
 import numpy as np
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v3.4", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v3.5", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -44,7 +44,7 @@ def normalize_title_for_comparison(title):
 def clean_title_for_output(title):
     if not isinstance(title, str): return ""
     title = convert_html_entities(title)
-    title = re.sub(r'\s*[|-]\s*[\w\s]+$', '', title).strip()
+    title = re.sub(r'\s*[|-].*$', '', title).strip()
     return title
 
 def corregir_texto(text):
@@ -136,6 +136,9 @@ def run_full_process(dossier_file, config_file):
     df['Mantener'] = 'Conservar'
 
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
+    for col in original_headers:
+        if col not in df.columns: df[col] = None
+            
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
@@ -148,15 +151,21 @@ def run_full_process(dossier_file, config_file):
     df.loc[cond_copy, 'Link Nota'] = df.loc[cond_copy, 'Link (Streaming - Imagen)']
     df.loc[is_print, 'Link (Streaming - Imagen)'] = None
     df.loc[is_broadcast, 'Link (Streaming - Imagen)'] = None
+    
+    # --- INICIO DE LA LÓGICA "CORTAR Y PEGAR" ---
+    if 'Duración - Nro. Caracteres' in df.columns and 'Dimensión' in df.columns:
+        df.loc[is_broadcast, 'Dimensión'] = df.loc[is_broadcast, 'Duración - Nro. Caracteres']
+        df.loc[is_broadcast, 'Duración - Nro. Caracteres'] = np.nan
+    # --- FIN DE LA LÓGICA "CORTAR Y PEGAR" ---
+
     df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
     progress_text.info("Paso 4/8: Detectando duplicados con lógica de prioridad...")
     df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
-    df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce').dt.normalize()
+    df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce').dt.normalize()
     
-    # --- INICIO DE LA LÓGICA DE PRIORIDAD Y DUPLICACIÓN DEFINITIVA ---
     df['seccion_priority'] = df['Sección - Programa'].isnull() | (df['Sección - Programa'] == '')
     df['dup_hora'] = np.where(df['Tipo de Medio'] == 'Internet', 'IGNORE_TIME', df['Hora'])
     
@@ -181,8 +190,8 @@ def run_full_process(dossier_file, config_file):
         consecutive_duplicates_mask = df_internet_to_check.duplicated(subset=group_cols + ['date_cluster'], keep='first')
         indices_to_eliminate = df_internet_to_check[consecutive_duplicates_mask].index
         df.loc[indices_to_eliminate, 'Mantener'] = 'Eliminar'
-    df.drop(columns=['dup_hora', 'seccion_priority'], inplace=True)
-    # --- FIN DE LA LÓGICA DE PRIORIDAD Y DUPLICACIÓN DEFINITIVA ---
+    
+    df.drop(columns=['dup_hora', 'seccion_priority'], inplace=True, errors='ignore')
     
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
     df_valid = df[df['Mantener'] == 'Conservar'].copy()
@@ -239,7 +248,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v3.4")
+st.title("🚀 Procesador Inteligente de Dossiers v3.5")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
