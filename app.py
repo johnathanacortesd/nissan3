@@ -164,7 +164,7 @@ def run_full_process(dossier_file, config_file):
     progress_text.info("Paso 2/8: Leyendo Dossier y expandiendo filas...")
     wb = load_workbook(dossier_file)
     sheet = wb.active
-    original_headers = [cell.value for cell in sheet[1] if cell.value]
+    original_headers = [cell.value for cell in sheet if cell.value]
     rows_to_expand = []
     for row in sheet.iter_rows(min_row=2):
         if all(c.value is None for c in row): continue
@@ -254,7 +254,7 @@ def run_full_process(dossier_file, config_file):
     df_valid_homog = df[~df['is_duplicate']].copy()
     if not df_valid_homog.empty and 'Temas Generales - Tema' in df_valid_homog.columns:
         df_valid_homog['titulo_norm_homog'] = df_valid_homog['Título'].apply(normalize_title_for_comparison)
-        homogenized_temas = df_valid_homog.groupby('titulo_norm_homog')['Temas Generales - Tema'].transform(lambda x: x.mode()[0] if not x.mode().empty else x)
+        homogenized_temas = df_valid_homog.groupby('titulo_norm_homog')['Temas Generales - Tema'].transform(lambda x: x.mode() if not x.mode().empty else x)
         df_valid_homog['Temas Generales - Tema'] = homogenized_temas
         df.update(df_valid_homog[['Temas Generales - Tema']])
 
@@ -313,4 +313,4 @@ if uploaded_files:
     if config_file: st.success(f"Archivo de Configuración cargado: **{config_file.name}**")
     else: st.warning("No se ha subido el archivo `Configuracion.xlsx`.")
 if st.button("▶️ Iniciar Proceso Completo", disabled=not (dossier_file and config_file), type="primary"):
-    run_full_process(dossier_file, config_file)```
+    run_full_process(dossier_file, config_file)
