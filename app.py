@@ -11,7 +11,7 @@ import numpy as np
 from difflib import SequenceMatcher
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v3.6", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v3.7", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -32,16 +32,51 @@ def extract_link_from_cell(cell):
 def convert_html_entities(text):
     if not isinstance(text, str): return text
     text = html.unescape(text)
-    custom_replacements = { '“': '\"', '”': '\"', '‘': "'", '’': "'", 'Â': '', 'â': '', '€': '', '™': '' }
+    custom_replacements = { '“': '\"', '”': '\"', '‘': "'", '’': "'", 'Â': '', 'â': '', '€': '', '™': '', '�': '' }
     for entity, char in custom_replacements.items():
         text = text.replace(entity, char)
     return text
 
+# --- NUEVA FUNCIÓN: Evalúa la "calidad" de un título ---
+def calculate_title_quality_score(title):
+    """
+    Asigna una puntuación de calidad a un título. Más bajo es peor.
+    Penaliza entidades HTML, caracteres de reemplazo y otros artefactos.
+    """
+    if not isinstance(title, str): return -999
+    score = 100
+    # Penalización fuerte por entidades HTML sin decodificar
+    score -= len(re.findall(r'&[#\w]+;', title)) * 10
+    # Penalización por caracteres extraños o de reemplazo
+    score -= title.count('??') * 5
+    score -= title.count('�') * 5
+    # Ligera preferencia por títulos más cortos si el contenido es el mismo
+    score -= len(title) * 0.01
+    return score
+
+# --- FUNCIÓN DE NORMALIZACIÓN MEJORADA ---
 def normalize_title_for_comparison(title):
+    """
+    Prepara un título para una comparación de similitud robusta.
+    """
     if not isinstance(title, str):
         return ""
+    
+    # 1. Limpiar entidades HTML y caracteres especiales primero
     cleaned_title = convert_html_entities(title)
+    
+    # 2. Eliminar texto de branding (después de | o - al final)
     cleaned_title = re.sub(r'\s*[|-].*$', '', cleaned_title).strip()
+    
+    # 3. Expandir abreviaturas comunes (crucial para la similitud semántica)
+    abbreviations = {
+        'tm': 'transporte masivo', # O 'transporte' si es más común
+        # Se pueden agregar más abreviaturas aquí
+    }
+    for abbr, full_text in abbreviations.items():
+        cleaned_title = re.sub(fr'\b{abbr}\b', full_text, cleaned_title, flags=re.IGNORECASE)
+
+    # 4. Normalización final: minúsculas y quitar no-alfanuméricos
     normalized_title = re.sub(r'\W+', ' ', cleaned_title).lower().strip()
     return normalized_title
 
@@ -104,6 +139,7 @@ def are_duplicates(row1, row2, title_similarity_threshold=0.85, date_proximity_d
     if row1['Medio'] != row2['Medio']:
         return False
 
+    # La comparación se hace con los títulos ya normalizados y expandidos
     titulo1 = normalize_title_for_comparison(row1['Título'])
     titulo2 = normalize_title_for_comparison(row2['Título'])
 
@@ -155,15 +191,14 @@ def run_full_process(dossier_file, config_file):
     progress_text.info("Paso 2/8: Leyendo Dossier y expandiendo filas...")
     wb = load_workbook(dossier_file)
     sheet = wb.active
-    
-    # --- LÍNEA CORREGIDA ---
     original_headers = [cell.value for cell in sheet[1] if cell.value]
     
     rows_to_expand = []
-    for row in sheet.iter_rows(min_row=2):
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=2)):
         if all(c.value is None for c in row): continue
         row_values = [c.value for c in row]
         row_data = dict(zip(original_headers, row_values))
+        
         if 'Link Nota' in original_headers:
             link_nota_index = original_headers.index('Link Nota')
             row_data['Link Nota'] = extract_link_from_cell(row[link_nota_index])
@@ -186,8 +221,10 @@ def run_full_process(dossier_file, config_file):
         if col not in df.columns: df[col] = None
     
     df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
-    df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
+    # La limpieza profunda del título se hace en la normalización para comparación
+    df['Título Limpio'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
+    
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
     
@@ -208,35 +245,46 @@ def run_full_process(dossier_file, config_file):
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    progress_text.info("Paso 4/8: Detectando duplicados con lógica avanzada...")
+    # --- INICIO DE LA NUEVA LÓGICA DE DUPLICACIÓN CON PRIORIDAD ---
+    progress_text.info("Paso 4/8: Detectando duplicados con criterio de calidad...")
     
     df['is_duplicate'] = False
     df_reset = df.reset_index().rename(columns={'index': 'original_index'})
     
-    df_reset['sort_key'] = df_reset['Título'].str.contains('"', na=False)
-    df_reset.sort_values(by=['sort_key', 'Fecha', 'original_index'], ascending=[False, True, True], inplace=True)
+    # Crear una puntuación de calidad para cada título
+    df_reset['title_quality'] = df_reset['Título'].apply(calculate_title_quality_score)
+    
+    # Ordenar para priorizar: Título más limpio > Fecha más antigua > Orden original
+    df_reset.sort_values(by=['title_quality', 'Fecha', 'original_index'], ascending=[False, True, True], inplace=True)
     
     rows_list = df_reset.to_dict('records')
     is_duplicate_map = {}
 
     for i in range(len(rows_list)):
-        if rows_list[i]['original_index'] in is_duplicate_map: continue
-        for j in range(i + 1, len(rows_list)):
-            if rows_list[j]['original_index'] in is_duplicate_map: continue
+        # Si esta fila ya fue marcada como duplicada de otra, la saltamos
+        if rows_list[i]['original_index'] in is_duplicate_map:
+            continue
             
-            row1 = rows_list[i]
-            row2 = rows_list[j]
+        for j in range(i + 1, len(rows_list)):
+            # Si la fila a comparar ya fue marcada, la saltamos
+            if rows_list[j]['original_index'] in is_duplicate_map:
+                continue
+            
+            row1 = rows_list[i] # La fila "buena" (mejor calidad, más antigua)
+            row2 = rows_list[j] # La fila candidata a ser duplicada
             
             if are_duplicates(pd.Series(row1), pd.Series(row2)):
+                # Marcamos la fila "mala" (peor calidad, más nueva) como duplicada
                 is_duplicate_map[row2['original_index']] = True
     
     df_reset['is_duplicate'] = df_reset['original_index'].map(is_duplicate_map).fillna(False)
-    df = df_reset.sort_values('original_index').set_index('original_index').drop(columns=['sort_key'])
+    df = df_reset.sort_values('original_index').set_index('original_index')
+    # --- FIN DE LA NUEVA LÓGICA DE DUPLICACIÓN ---
 
-    progress_text.info("Paso 5/8: Aplicando modelos de IA...")
+    progress_text.info("Paso 5/8: Aplicando modelos de IA a noticias únicas...")
     df_valid = df[~df['is_duplicate']].copy()
     if not df_valid.empty:
-        df_valid['texto_para_ia'] = df_valid['Título'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
+        df_valid['texto_para_ia'] = df_valid['Título Limpio'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
         X_sent = sentiment_vectorizer.transform(df_valid['texto_para_ia'])
         preds_sent = sentiment_model.predict(X_sent)
         label_map_inv = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo'}
@@ -254,12 +302,14 @@ def run_full_process(dossier_file, config_file):
         df_valid_homog['Temas Generales - Tema'] = homogenized_temas
         df.update(df_valid_homog[['Temas Generales - Tema']])
 
-    progress_text.info("Paso 7/8: Mapeando tema final...")
+    progress_text.info("Paso 7/8: Mapeando tema final y marcando duplicadas...")
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
     
     df.loc[df['is_duplicate'], ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
-    
+    # Usar el título limpio para la salida final
+    df['Título'] = df['Título Limpio']
+
     progress_text.info("Paso 8/8: Generando resultados finales...")
     st.balloons()
     progress_text.success("¡Proceso completado con éxito!")
@@ -290,7 +340,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v3.6")
+st.title("🚀 Procesador Inteligente de Dossiers v3.7")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
