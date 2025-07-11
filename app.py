@@ -8,9 +8,10 @@ import re
 import nltk
 import html
 import numpy as np
+from difflib import SequenceMatcher # Importación necesaria para la nueva lógica
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v3.5", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v3.6", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -36,10 +37,17 @@ def convert_html_entities(text):
         text = text.replace(entity, char)
     return text
 
+# --- FUNCIÓN MEJORADA (De la app anterior) ---
 def normalize_title_for_comparison(title):
-    if not isinstance(title, str): return ""
-    title = convert_html_entities(title)
-    return re.sub(r'\W+', ' ', title).lower().strip()
+    if not isinstance(title, str):
+        return ""
+    # Paso 1: Limpiar entidades HTML y caracteres especiales
+    cleaned_title = convert_html_entities(title)
+    # Paso 2: Eliminar el texto de branding después de un '|' o '-'
+    cleaned_title = re.sub(r'\s*[|-].*$', '', cleaned_title).strip()
+    # Paso 3: Aplicar la normalización estándar (quitar no-alfanuméricos, minúsculas).
+    normalized_title = re.sub(r'\W+', ' ', cleaned_title).lower().strip()
+    return normalized_title
 
 def clean_title_for_output(title):
     if not isinstance(title, str): return ""
@@ -94,6 +102,45 @@ def load_ml_models():
     topic_vectorizer = joblib.load('vectorizador_tema.pkl')
     return sentiment_model, sentiment_vectorizer, topic_model, topic_vectorizer
 
+# --- NUEVA FUNCIÓN DE DUPLICACIÓN (De la app anterior) ---
+def are_duplicates(row1, row2, title_similarity_threshold=0.85, date_proximity_days=1):
+    """
+    Compara dos filas (pd.Series) para determinar si son duplicadas.
+    """
+    if row1['Menciones - Empresa'] != row2['Menciones - Empresa']:
+        return False
+    if row1['Medio'] != row2['Medio']:
+        return False
+
+    titulo1 = normalize_title_for_comparison(row1['Título'])
+    titulo2 = normalize_title_for_comparison(row2['Título'])
+
+    try:
+        # Aseguramos que las fechas son objetos date
+        fecha1 = row1['Fecha'].date() if pd.notna(row1['Fecha']) else None
+        fecha2 = row2['Fecha'].date() if pd.notna(row2['Fecha']) else None
+        if fecha1 is None or fecha2 is None: return False
+    except AttributeError: # Si ya es date, no tendrá .date
+        fecha1 = row1['Fecha']
+        fecha2 = row2['Fecha']
+    except Exception:
+        return False
+
+    if row1['Tipo de Medio'] == 'Internet':
+        if row1['Hora'] == row2['Hora']: return False
+        if abs((fecha1 - fecha2).days) > date_proximity_days: return False
+        
+        if titulo1 == titulo2 and titulo1 != "": return True
+        similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
+        if similarity >= title_similarity_threshold: return True
+    else: # Para otros medios
+        if row1['Tipo de Medio'] in ['Radio', 'Televisión']:
+            if row1['Hora'] != row2['Hora']: return False
+        if fecha1 != fecha2: return False
+        if titulo1 == titulo2 and titulo1 != "": return True
+            
+    return False
+
 # ==============================================================================
 # LÓGICA DE PROCESAMIENTO PRINCIPAL
 # ==============================================================================
@@ -133,68 +180,65 @@ def run_full_process(dossier_file, config_file):
                 new_row['Menciones - Empresa'] = mencion
                 rows_to_expand.append(new_row)
     df = pd.DataFrame(rows_to_expand)
-    df['Mantener'] = 'Conservar'
-
+    
     progress_text.info("Paso 3/8: Aplicando mapeos y normalizaciones...")
     for col in original_headers:
         if col not in df.columns: df[col] = None
-            
+    
+    df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
     df['Título'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
+    
     is_internet = df['Tipo de Medio'] == 'Internet'
     is_print = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
     is_broadcast = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
+    
     df.loc[is_internet, ['Link Nota', 'Link (Streaming - Imagen)']] = df.loc[is_internet, ['Link (Streaming - Imagen)', 'Link Nota']].values
     cond_copy = is_print & df['Link Nota'].isnull() & df['Link (Streaming - Imagen)'].notnull()
     df.loc[cond_copy, 'Link Nota'] = df.loc[cond_copy, 'Link (Streaming - Imagen)']
-    df.loc[is_print, 'Link (Streaming - Imagen)'] = None
-    df.loc[is_broadcast, 'Link (Streaming - Imagen)'] = None
+    df.loc[is_print | is_broadcast, 'Link (Streaming - Imagen)'] = None
     
-    # --- INICIO DE LA LÓGICA "CORTAR Y PEGAR" ---
     if 'Duración - Nro. Caracteres' in df.columns and 'Dimensión' in df.columns:
         df.loc[is_broadcast, 'Dimensión'] = df.loc[is_broadcast, 'Duración - Nro. Caracteres']
         df.loc[is_broadcast, 'Duración - Nro. Caracteres'] = np.nan
-    # --- FIN DE LA LÓGICA "CORTAR Y PEGAR" ---
 
     df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    progress_text.info("Paso 4/8: Detectando duplicados con lógica de prioridad...")
-    df['titulo_norm'] = df['Título'].apply(normalize_title_for_comparison)
-    df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce').dt.normalize()
+    # --- INICIO DE LA NUEVA LÓGICA DE DUPLICACIÓN ---
+    progress_text.info("Paso 4/8: Detectando duplicados con lógica avanzada...")
     
-    df['seccion_priority'] = df['Sección - Programa'].isnull() | (df['Sección - Programa'] == '')
-    df['dup_hora'] = np.where(df['Tipo de Medio'] == 'Internet', 'IGNORE_TIME', df['Hora'])
+    df['is_duplicate'] = False
+    df_reset = df.reset_index().rename(columns={'index': 'original_index'})
     
-    dup_cols_exact = ['titulo_norm', 'Medio', 'Fecha', 'Menciones - Empresa', 'dup_hora']
-    sort_by_cols = dup_cols_exact + ['seccion_priority']
-    ascending_order = [True] * len(dup_cols_exact) + [False]
-    df.sort_values(by=sort_by_cols, ascending=ascending_order, inplace=True)
-    exact_duplicates_mask = df.duplicated(subset=dup_cols_exact, keep='first')
-    df.loc[exact_duplicates_mask, 'Mantener'] = 'Eliminar'
-    df.sort_index(inplace=True)
+    # Crear clave de ordenación para priorizar qué fila conservar
+    df_reset['sort_key'] = df_reset['Título'].str.contains('"', na=False)
+    df_reset.sort_values(by=['sort_key', 'Fecha', 'original_index'], ascending=[False, True, True], inplace=True)
     
-    df_internet_to_check = df[(df['Mantener'] == 'Conservar') & (is_internet)].copy()
-    if not df_internet_to_check.empty:
-        group_cols = ['titulo_norm', 'Medio', 'Menciones - Empresa']
-        df_internet_to_check.sort_values(by=group_cols + ['Fecha'], inplace=True)
-        date_diffs = df_internet_to_check.groupby(group_cols)['Fecha'].diff().dt.days
-        cluster_ids = (date_diffs != 1).cumsum()
-        df_internet_to_check['date_cluster'] = cluster_ids
-        sort_by_cols_consecutive = group_cols + ['date_cluster', 'seccion_priority']
-        ascending_order_consecutive = [True] * (len(group_cols) + 1) + [False]
-        df_internet_to_check.sort_values(by=sort_by_cols_consecutive, ascending=ascending_order_consecutive, inplace=True)
-        consecutive_duplicates_mask = df_internet_to_check.duplicated(subset=group_cols + ['date_cluster'], keep='first')
-        indices_to_eliminate = df_internet_to_check[consecutive_duplicates_mask].index
-        df.loc[indices_to_eliminate, 'Mantener'] = 'Eliminar'
+    indices = df_reset.index.tolist()
+    for i in range(len(indices)):
+        idx1 = indices[i]
+        if df_reset.loc[idx1, 'is_duplicate']: continue
+        
+        for j in range(i + 1, len(indices)):
+            idx2 = indices[j]
+            if df_reset.loc[idx2, 'is_duplicate']: continue
+            
+            row1 = df_reset.loc[idx1]
+            row2 = df_reset.loc[idx2]
+            
+            if are_duplicates(row1, row2):
+                df_reset.loc[idx2, 'is_duplicate'] = True
     
-    df.drop(columns=['dup_hora', 'seccion_priority'], inplace=True, errors='ignore')
-    
+    df = df_reset.sort_values('original_index').set_index('original_index').drop(columns=['sort_key'])
+    # --- FIN DE LA NUEVA LÓGICA DE DUPLICACIÓN ---
+
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
-    df_valid = df[df['Mantener'] == 'Conservar'].copy()
+    # Se reemplaza 'Mantener' por 'is_duplicate'
+    df_valid = df[~df['is_duplicate']].copy()
     if not df_valid.empty:
         df_valid['texto_para_ia'] = df_valid['Título'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
         X_sent = sentiment_vectorizer.transform(df_valid['texto_para_ia'])
@@ -207,16 +251,19 @@ def run_full_process(dossier_file, config_file):
         df.update(df_valid[['Tono', 'Temas Generales - Tema']])
 
     progress_text.info("Paso 6/8: Homogeneizando temas...")
-    df_valid_homog = df[df['Mantener'] == 'Conservar'].copy()
+    df_valid_homog = df[~df['is_duplicate']].copy()
     if not df_valid_homog.empty and 'Temas Generales - Tema' in df_valid_homog.columns:
-        homogenized_temas = df_valid_homog.groupby('titulo_norm')['Temas Generales - Tema'].transform(lambda x: x.mode()[0] if not x.mode().empty else x)
+        df_valid_homog['titulo_norm_homog'] = df_valid_homog['Título'].apply(normalize_title_for_comparison)
+        homogenized_temas = df_valid_homog.groupby('titulo_norm_homog')['Temas Generales - Tema'].transform(lambda x: x.mode()[0] if not x.mode().empty else x)
         df_valid_homog['Temas Generales - Tema'] = homogenized_temas
         df.update(df_valid_homog[['Temas Generales - Tema']])
 
     progress_text.info("Paso 7/8: Mapeando tema final...")
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
-    df.loc[df['Mantener'] == 'Eliminar', ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
+    
+    # Se reemplaza 'Mantener' por 'is_duplicate' para marcar las filas
+    df.loc[df['is_duplicate'], ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
     
     progress_text.info("Paso 8/8: Generando resultados finales...")
     st.balloons()
@@ -228,7 +275,8 @@ def run_full_process(dossier_file, config_file):
     st.subheader("📊 Resumen del Proceso")
     col1, col2, col3 = st.columns(3)
     col1.metric("Filas Totales", len(df_final))
-    dups_count = (df_final['Mantener'] == 'Eliminar').sum()
+    # Se reemplaza 'Mantener' por 'is_duplicate' para el conteo
+    dups_count = df_final['is_duplicate'].sum()
     col2.metric("Filas Marcadas como Duplicadas", dups_count)
     col3.metric("Filas Únicas", len(df_final) - dups_count)
     
@@ -248,7 +296,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v3.5")
+st.title("🚀 Procesador Inteligente de Dossiers v3.6") # Versión actualizada
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
@@ -265,4 +313,4 @@ if uploaded_files:
     if config_file: st.success(f"Archivo de Configuración cargado: **{config_file.name}**")
     else: st.warning("No se ha subido el archivo `Configuracion.xlsx`.")
 if st.button("▶️ Iniciar Proceso Completo", disabled=not (dossier_file and config_file), type="primary"):
-    run_full_process(dossier_file, config_file)
+    run_full_process(dossier_file, config_file)```
