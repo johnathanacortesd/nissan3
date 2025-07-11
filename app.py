@@ -8,7 +8,7 @@ import re
 import nltk
 import html
 import numpy as np
-from difflib import SequenceMatcher # Importación necesaria para la nueva lógica
+from difflib import SequenceMatcher
 
 # --- Configuración de la página ---
 st.set_page_config(page_title="Procesador de Dossiers Nissan v3.6", layout="wide")
@@ -37,15 +37,11 @@ def convert_html_entities(text):
         text = text.replace(entity, char)
     return text
 
-# --- FUNCIÓN MEJORADA (De la app anterior) ---
 def normalize_title_for_comparison(title):
     if not isinstance(title, str):
         return ""
-    # Paso 1: Limpiar entidades HTML y caracteres especiales
     cleaned_title = convert_html_entities(title)
-    # Paso 2: Eliminar el texto de branding después de un '|' o '-'
     cleaned_title = re.sub(r'\s*[|-].*$', '', cleaned_title).strip()
-    # Paso 3: Aplicar la normalización estándar (quitar no-alfanuméricos, minúsculas).
     normalized_title = re.sub(r'\W+', ' ', cleaned_title).lower().strip()
     return normalized_title
 
@@ -102,11 +98,7 @@ def load_ml_models():
     topic_vectorizer = joblib.load('vectorizador_tema.pkl')
     return sentiment_model, sentiment_vectorizer, topic_model, topic_vectorizer
 
-# --- NUEVA FUNCIÓN DE DUPLICACIÓN (De la app anterior) ---
 def are_duplicates(row1, row2, title_similarity_threshold=0.85, date_proximity_days=1):
-    """
-    Compara dos filas (pd.Series) para determinar si son duplicadas.
-    """
     if row1['Menciones - Empresa'] != row2['Menciones - Empresa']:
         return False
     if row1['Medio'] != row2['Medio']:
@@ -116,11 +108,10 @@ def are_duplicates(row1, row2, title_similarity_threshold=0.85, date_proximity_d
     titulo2 = normalize_title_for_comparison(row2['Título'])
 
     try:
-        # Aseguramos que las fechas son objetos date
         fecha1 = row1['Fecha'].date() if pd.notna(row1['Fecha']) else None
         fecha2 = row2['Fecha'].date() if pd.notna(row2['Fecha']) else None
         if fecha1 is None or fecha2 is None: return False
-    except AttributeError: # Si ya es date, no tendrá .date
+    except AttributeError:
         fecha1 = row1['Fecha']
         fecha2 = row2['Fecha']
     except Exception:
@@ -133,7 +124,7 @@ def are_duplicates(row1, row2, title_similarity_threshold=0.85, date_proximity_d
         if titulo1 == titulo2 and titulo1 != "": return True
         similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
         if similarity >= title_similarity_threshold: return True
-    else: # Para otros medios
+    else:
         if row1['Tipo de Medio'] in ['Radio', 'Televisión']:
             if row1['Hora'] != row2['Hora']: return False
         if fecha1 != fecha2: return False
@@ -164,16 +155,25 @@ def run_full_process(dossier_file, config_file):
     progress_text.info("Paso 2/8: Leyendo Dossier y expandiendo filas...")
     wb = load_workbook(dossier_file)
     sheet = wb.active
-    original_headers = [cell.value for cell in sheet if cell.value]
+    
+    # --- LÍNEA CORREGIDA ---
+    original_headers = [cell.value for cell in sheet[1] if cell.value]
+    
     rows_to_expand = []
     for row in sheet.iter_rows(min_row=2):
         if all(c.value is None for c in row): continue
         row_values = [c.value for c in row]
         row_data = dict(zip(original_headers, row_values))
-        if 'Link Nota' in original_headers: row_data['Link Nota'] = extract_link_from_cell(row[original_headers.index('Link Nota')])
-        if 'Link (Streaming - Imagen)' in original_headers: row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[original_headers.index('Link (Streaming - Imagen)')])
+        if 'Link Nota' in original_headers:
+            link_nota_index = original_headers.index('Link Nota')
+            row_data['Link Nota'] = extract_link_from_cell(row[link_nota_index])
+        if 'Link (Streaming - Imagen)' in original_headers:
+            link_streaming_index = original_headers.index('Link (Streaming - Imagen)')
+            row_data['Link (Streaming - Imagen)'] = extract_link_from_cell(row[link_streaming_index])
+        
         menciones = [m.strip() for m in str(row_data.get('Menciones - Empresa') or '').split(';') if m.strip()]
-        if not menciones: rows_to_expand.append(row_data)
+        if not menciones:
+            rows_to_expand.append(row_data)
         else:
             for mencion in menciones:
                 new_row = row_data.copy()
@@ -208,36 +208,32 @@ def run_full_process(dossier_file, config_file):
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    # --- INICIO DE LA NUEVA LÓGICA DE DUPLICACIÓN ---
     progress_text.info("Paso 4/8: Detectando duplicados con lógica avanzada...")
     
     df['is_duplicate'] = False
     df_reset = df.reset_index().rename(columns={'index': 'original_index'})
     
-    # Crear clave de ordenación para priorizar qué fila conservar
     df_reset['sort_key'] = df_reset['Título'].str.contains('"', na=False)
     df_reset.sort_values(by=['sort_key', 'Fecha', 'original_index'], ascending=[False, True, True], inplace=True)
     
-    indices = df_reset.index.tolist()
-    for i in range(len(indices)):
-        idx1 = indices[i]
-        if df_reset.loc[idx1, 'is_duplicate']: continue
-        
-        for j in range(i + 1, len(indices)):
-            idx2 = indices[j]
-            if df_reset.loc[idx2, 'is_duplicate']: continue
+    rows_list = df_reset.to_dict('records')
+    is_duplicate_map = {}
+
+    for i in range(len(rows_list)):
+        if rows_list[i]['original_index'] in is_duplicate_map: continue
+        for j in range(i + 1, len(rows_list)):
+            if rows_list[j]['original_index'] in is_duplicate_map: continue
             
-            row1 = df_reset.loc[idx1]
-            row2 = df_reset.loc[idx2]
+            row1 = rows_list[i]
+            row2 = rows_list[j]
             
-            if are_duplicates(row1, row2):
-                df_reset.loc[idx2, 'is_duplicate'] = True
+            if are_duplicates(pd.Series(row1), pd.Series(row2)):
+                is_duplicate_map[row2['original_index']] = True
     
+    df_reset['is_duplicate'] = df_reset['original_index'].map(is_duplicate_map).fillna(False)
     df = df_reset.sort_values('original_index').set_index('original_index').drop(columns=['sort_key'])
-    # --- FIN DE LA NUEVA LÓGICA DE DUPLICACIÓN ---
 
     progress_text.info("Paso 5/8: Aplicando modelos de IA...")
-    # Se reemplaza 'Mantener' por 'is_duplicate'
     df_valid = df[~df['is_duplicate']].copy()
     if not df_valid.empty:
         df_valid['texto_para_ia'] = df_valid['Título'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
@@ -254,7 +250,7 @@ def run_full_process(dossier_file, config_file):
     df_valid_homog = df[~df['is_duplicate']].copy()
     if not df_valid_homog.empty and 'Temas Generales - Tema' in df_valid_homog.columns:
         df_valid_homog['titulo_norm_homog'] = df_valid_homog['Título'].apply(normalize_title_for_comparison)
-        homogenized_temas = df_valid_homog.groupby('titulo_norm_homog')['Temas Generales - Tema'].transform(lambda x: x.mode() if not x.mode().empty else x)
+        homogenized_temas = df_valid_homog.groupby('titulo_norm_homog')['Temas Generales - Tema'].transform(lambda x: x.mode()[0] if not x.mode().empty else x)
         df_valid_homog['Temas Generales - Tema'] = homogenized_temas
         df.update(df_valid_homog[['Temas Generales - Tema']])
 
@@ -262,7 +258,6 @@ def run_full_process(dossier_file, config_file):
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
     
-    # Se reemplaza 'Mantener' por 'is_duplicate' para marcar las filas
     df.loc[df['is_duplicate'], ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
     
     progress_text.info("Paso 8/8: Generando resultados finales...")
@@ -275,7 +270,6 @@ def run_full_process(dossier_file, config_file):
     st.subheader("📊 Resumen del Proceso")
     col1, col2, col3 = st.columns(3)
     col1.metric("Filas Totales", len(df_final))
-    # Se reemplaza 'Mantener' por 'is_duplicate' para el conteo
     dups_count = df_final['is_duplicate'].sum()
     col2.metric("Filas Marcadas como Duplicadas", dups_count)
     col3.metric("Filas Únicas", len(df_final) - dups_count)
@@ -296,7 +290,7 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v3.6") # Versión actualizada
+st.title("🚀 Procesador Inteligente de Dossiers v3.6")
 st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
