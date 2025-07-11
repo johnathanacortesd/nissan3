@@ -11,7 +11,7 @@ import numpy as np
 from difflib import SequenceMatcher
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v3.7", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v3.8", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -37,46 +37,22 @@ def convert_html_entities(text):
         text = text.replace(entity, char)
     return text
 
-# --- NUEVA FUNCIÓN: Evalúa la "calidad" de un título ---
 def calculate_title_quality_score(title):
-    """
-    Asigna una puntuación de calidad a un título. Más bajo es peor.
-    Penaliza entidades HTML, caracteres de reemplazo y otros artefactos.
-    """
     if not isinstance(title, str): return -999
     score = 100
-    # Penalización fuerte por entidades HTML sin decodificar
     score -= len(re.findall(r'&[#\w]+;', title)) * 10
-    # Penalización por caracteres extraños o de reemplazo
     score -= title.count('??') * 5
     score -= title.count('�') * 5
-    # Ligera preferencia por títulos más cortos si el contenido es el mismo
     score -= len(title) * 0.01
     return score
 
-# --- FUNCIÓN DE NORMALIZACIÓN MEJORADA ---
 def normalize_title_for_comparison(title):
-    """
-    Prepara un título para una comparación de similitud robusta.
-    """
-    if not isinstance(title, str):
-        return ""
-    
-    # 1. Limpiar entidades HTML y caracteres especiales primero
+    if not isinstance(title, str): return ""
     cleaned_title = convert_html_entities(title)
-    
-    # 2. Eliminar texto de branding (después de | o - al final)
     cleaned_title = re.sub(r'\s*[|-].*$', '', cleaned_title).strip()
-    
-    # 3. Expandir abreviaturas comunes (crucial para la similitud semántica)
-    abbreviations = {
-        'tm': 'transporte masivo', # O 'transporte' si es más común
-        # Se pueden agregar más abreviaturas aquí
-    }
+    abbreviations = {'tm': 'transporte masivo'}
     for abbr, full_text in abbreviations.items():
         cleaned_title = re.sub(fr'\b{abbr}\b', full_text, cleaned_title, flags=re.IGNORECASE)
-
-    # 4. Normalización final: minúsculas y quitar no-alfanuméricos
     normalized_title = re.sub(r'\W+', ' ', cleaned_title).lower().strip()
     return normalized_title
 
@@ -125,13 +101,18 @@ def to_excel_from_df(df, final_order):
                         worksheet.write_url(row_idx + 1, col_idx, url, link_format, 'Link')
     return output.getvalue()
 
+# --- FUNCIÓN DE CARGA DE MODELOS ACTUALIZADA ---
 @st.cache_resource
 def load_ml_models():
-    sentiment_model = joblib.load('modelo_sentimiento.pkl')
-    sentiment_vectorizer = joblib.load('vectorizador_sentimiento.pkl')
-    topic_model = joblib.load('modelo_tema.pkl')
-    topic_vectorizer = joblib.load('vectorizador_tema.pkl')
-    return sentiment_model, sentiment_vectorizer, topic_model, topic_vectorizer
+    """Carga los pipelines completos de sentimiento y tema."""
+    try:
+        sentiment_pipeline = joblib.load('pipeline_sentimiento.pkl')
+        topic_pipeline = joblib.load('pipeline_tema.pkl')
+        return sentiment_pipeline, topic_pipeline
+    except FileNotFoundError as e:
+        st.error(f"Error Crítico: No se encontró un archivo de modelo: {e.filename}. Asegúrate de que 'pipeline_sentimiento.pkl' y 'pipeline_tema.pkl' estén en la carpeta de la aplicación.")
+        st.stop()
+
 
 def are_duplicates(row1, row2, title_similarity_threshold=0.85, date_proximity_days=1):
     if row1['Menciones - Empresa'] != row2['Menciones - Empresa']:
@@ -139,7 +120,6 @@ def are_duplicates(row1, row2, title_similarity_threshold=0.85, date_proximity_d
     if row1['Medio'] != row2['Medio']:
         return False
 
-    # La comparación se hace con los títulos ya normalizados y expandidos
     titulo1 = normalize_title_for_comparison(row1['Título'])
     titulo2 = normalize_title_for_comparison(row2['Título'])
 
@@ -176,16 +156,17 @@ def run_full_process(dossier_file, config_file):
     st.markdown("---")
     progress_text = st.empty()
     
-    progress_text.info("Paso 1/8: Cargando modelos y configuración...")
+    progress_text.info("Paso 1/8: Cargando modelos optimizados y configuración...")
+    # --- LÓGICA DE CARGA ACTUALIZADA ---
+    sentiment_pipeline, topic_pipeline = load_ml_models()
     try:
-        sentiment_model, sentiment_vectorizer, topic_model, topic_vectorizer = load_ml_models()
         config_sheets = pd.read_excel(config_file.read(), sheet_name=None)
         region_map = pd.Series(config_sheets['Regiones'].iloc[:, 1].values, index=config_sheets['Regiones'].iloc[:, 0].astype(str).str.lower().str.strip()).to_dict()
         internet_map = pd.Series(config_sheets['Internet'].iloc[:, 1].values, index=config_sheets['Internet'].iloc[:, 0].astype(str).str.lower().str.strip()).to_dict()
         mention_map = pd.Series(config_sheets['Menciones'].iloc[:, 1].values, index=config_sheets['Menciones'].iloc[:, 0].astype(str).str.strip()).to_dict()
         final_topic_map = pd.Series(config_sheets['Mapa_Temas'].iloc[:, 1].values, index=config_sheets['Mapa_Temas'].iloc[:, 0].astype(str).str.strip()).to_dict()
     except Exception as e:
-        st.error(f"Error al cargar archivos: {e}. Revisa que los archivos de modelos (.pkl) y `Configuracion.xlsx` sean correctos.")
+        st.error(f"Error al cargar el archivo de configuración: {e}. Revisa que `Configuracion.xlsx` sea correcto.")
         st.stop()
 
     progress_text.info("Paso 2/8: Leyendo Dossier y expandiendo filas...")
@@ -221,7 +202,6 @@ def run_full_process(dossier_file, config_file):
         if col not in df.columns: df[col] = None
     
     df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
-    # La limpieza profunda del título se hace en la normalización para comparación
     df['Título Limpio'] = df['Título'].astype(str).apply(clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].astype(str).apply(corregir_texto)
     
@@ -245,53 +225,44 @@ def run_full_process(dossier_file, config_file):
     df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    # --- INICIO DE LA NUEVA LÓGICA DE DUPLICACIÓN CON PRIORIDAD ---
     progress_text.info("Paso 4/8: Detectando duplicados con criterio de calidad...")
     
     df['is_duplicate'] = False
     df_reset = df.reset_index().rename(columns={'index': 'original_index'})
     
-    # Crear una puntuación de calidad para cada título
     df_reset['title_quality'] = df_reset['Título'].apply(calculate_title_quality_score)
-    
-    # Ordenar para priorizar: Título más limpio > Fecha más antigua > Orden original
     df_reset.sort_values(by=['title_quality', 'Fecha', 'original_index'], ascending=[False, True, True], inplace=True)
     
     rows_list = df_reset.to_dict('records')
     is_duplicate_map = {}
 
     for i in range(len(rows_list)):
-        # Si esta fila ya fue marcada como duplicada de otra, la saltamos
-        if rows_list[i]['original_index'] in is_duplicate_map:
-            continue
-            
+        if rows_list[i]['original_index'] in is_duplicate_map: continue
         for j in range(i + 1, len(rows_list)):
-            # Si la fila a comparar ya fue marcada, la saltamos
-            if rows_list[j]['original_index'] in is_duplicate_map:
-                continue
+            if rows_list[j]['original_index'] in is_duplicate_map: continue
             
-            row1 = rows_list[i] # La fila "buena" (mejor calidad, más antigua)
-            row2 = rows_list[j] # La fila candidata a ser duplicada
+            row1 = rows_list[i]
+            row2 = rows_list[j]
             
             if are_duplicates(pd.Series(row1), pd.Series(row2)):
-                # Marcamos la fila "mala" (peor calidad, más nueva) como duplicada
                 is_duplicate_map[row2['original_index']] = True
     
     df_reset['is_duplicate'] = df_reset['original_index'].map(is_duplicate_map).fillna(False)
     df = df_reset.sort_values('original_index').set_index('original_index')
-    # --- FIN DE LA NUEVA LÓGICA DE DUPLICACIÓN ---
 
     progress_text.info("Paso 5/8: Aplicando modelos de IA a noticias únicas...")
     df_valid = df[~df['is_duplicate']].copy()
     if not df_valid.empty:
         df_valid['texto_para_ia'] = df_valid['Título Limpio'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
-        X_sent = sentiment_vectorizer.transform(df_valid['texto_para_ia'])
-        preds_sent = sentiment_model.predict(X_sent)
+        
+        # --- LÓGICA DE PREDICCIÓN ACTUALIZADA ---
+        preds_sent = sentiment_pipeline.predict(df_valid['texto_para_ia'])
         label_map_inv = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo'}
         df_valid['Tono'] = [label_map_inv.get(p, 'Indefinido') for p in preds_sent]
+        
         df_valid["resumen_procesado"] = df_valid["texto_para_ia"].apply(preprocess_text_for_topic)
-        X_tema = topic_vectorizer.transform(df_valid["resumen_procesado"])
-        df_valid["Temas Generales - Tema"] = topic_model.predict(X_tema)
+        df_valid["Temas Generales - Tema"] = topic_pipeline.predict(df_valid["resumen_procesado"])
+        
         df.update(df_valid[['Tono', 'Temas Generales - Tema']])
 
     progress_text.info("Paso 6/8: Homogeneizando temas...")
@@ -307,7 +278,6 @@ def run_full_process(dossier_file, config_file):
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
     
     df.loc[df['is_duplicate'], ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
-    # Usar el título limpio para la salida final
     df['Título'] = df['Título Limpio']
 
     progress_text.info("Paso 8/8: Generando resultados finales...")
@@ -340,8 +310,8 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v3.7")
-st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática.")
+st.title("🚀 Procesador Inteligente de Dossiers v3.8")
+st.markdown("Una herramienta para limpiar, enriquecer y analizar dossieres de noticias de forma automática con modelos mejorados.")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos juntos en el área de abajo.\n3. Haz clic en 'Iniciar Proceso'.")
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
     st.markdown("- **`Regiones`**: Columna A (Medio), Columna B (Región).\n- **`Internet`**: Columna A (Medio Original), Columna B (Medio Mapeado).\n- **`Menciones`**: Columna A (Mención Original), Columna B (Mención Mapeada).\n- **`Mapa_Temas`**: Columna A (Temas Generales - Tema), Columna B (Tema).")
