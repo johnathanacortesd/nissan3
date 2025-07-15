@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
@@ -5,19 +6,17 @@ import datetime
 import joblib
 import numpy as np
 import nltk
-
-# Importar todas nuestras funciones de ayuda desde el nuevo archivo
 import dossier_utils as utils
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v3.9", layout="wide")
+st.set_page_config(page_title="Procesador de Dossiers Nissan v4.0", layout="wide")
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
     nltk.data.find('corpora/stopwords')
 except LookupError:
-    st.info("Descargando recursos de lenguaje por primera vez...")
-    nltk.download('stopwords')
+    with st.spinner("Descargando recursos de lenguaje por primera vez..."):
+        nltk.download('stopwords')
     st.success("Recursos listos.")
 
 # ==============================================================================
@@ -32,7 +31,7 @@ def load_ml_models():
         topic_pipeline = joblib.load('pipeline_tema.pkl')
         return sentiment_pipeline, topic_pipeline
     except FileNotFoundError as e:
-        st.error(f"Error Crítico: No se encontró el archivo de modelo: {e.filename}. Asegúrate de que 'pipeline_sentimiento.pkl' y 'pipeline_tema.pkl' estén en la misma carpeta que la aplicación.")
+        st.error(f"Error Crítico: No se encontró el archivo de modelo: {e.filename}. Asegúrate de que 'pipeline_sentimiento.pkl' y 'pipeline_tema.pkl' estén en la misma carpeta.")
         st.stop()
 
 def read_and_expand_dossier(dossier_file):
@@ -42,19 +41,16 @@ def read_and_expand_dossier(dossier_file):
     original_headers = [cell.value for cell in sheet[1] if cell.value]
     
     rows_data = []
-    # Itera sobre las filas para extraer datos y links correctamente
     for row in sheet.iter_rows(min_row=2, values_only=False):
         if all(c.value is None for c in row): continue
         
         row_values = {}
         for i, header in enumerate(original_headers):
-            # Lógica especial para extraer el link o el valor de la celda
             if header in ['Link Nota', 'Link (Streaming - Imagen)']:
                 row_values[header] = utils.extract_link_from_cell(row[i])
             else:
                 row_values[header] = row[i].value
         
-        # Expande las filas por cada mención separada por ';'
         menciones_str = str(row_values.get('Menciones - Empresa') or '')
         menciones = [m.strip() for m in menciones_str.split(';') if m.strip()]
         
@@ -66,10 +62,9 @@ def read_and_expand_dossier(dossier_file):
                 new_row['Menciones - Empresa'] = mencion
                 rows_data.append(new_row)
     
-    return pd.DataFrame(rows_data), original_headers
+    return pd.DataFrame(rows_data)
 
 def run_full_process(dossier_file, config_file):
-    
     st.markdown("---")
     progress_bar = st.progress(0, text="Iniciando proceso...")
 
@@ -83,29 +78,23 @@ def run_full_process(dossier_file, config_file):
         mention_map = pd.Series(config_sheets['Menciones'].iloc[:, 1].values, index=config_sheets['Menciones'].iloc[:, 0].astype(str).str.strip()).to_dict()
         final_topic_map = pd.Series(config_sheets['Mapa_Temas'].iloc[:, 1].values, index=config_sheets['Mapa_Temas'].iloc[:, 0].astype(str).str.strip()).to_dict()
     except Exception as e:
-        st.error(f"Error al cargar `Configuracion.xlsx`: {e}. Revisa que el archivo y sus hojas sean correctos.")
+        st.error(f"Error al cargar `Configuracion.xlsx`: {e}. Revisa el archivo.")
         st.stop()
 
     # --- 2. Lectura y Expansión del Dossier ---
     progress_bar.progress(15, text="Paso 2/8: Leyendo Dossier y expandiendo filas...")
-    df, original_headers = read_and_expand_dossier(dossier_file)
+    df = read_and_expand_dossier(dossier_file)
 
     # --- 3. Limpieza y Normalización de Datos ---
     progress_bar.progress(25, text="Paso 3/8: Aplicando mapeos y normalizaciones...")
-    
-    # *** LA SOLUCIÓN CLAVE PARA LAS FECHAS ***
     if 'Fecha' in df.columns:
-        original_dates = df['Fecha'].copy()
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce', dayfirst=True)
-        failed_dates = df['Fecha'].isna().sum()
-        if failed_dates > 0:
-            st.warning(f"⚠️ **Atención:** No se pudieron convertir {failed_dates} fechas. Se mantendrán como vacías. Revisa el archivo original si esto es inesperado.")
+        if df['Fecha'].isna().any():
+            st.warning(f"⚠️ Atención: Algunas fechas no se pudieron convertir. Revisa el archivo original.")
 
-    # Limpieza de texto usando funciones de utils
     df['Título Limpio'] = df['Título'].apply(utils.clean_title_for_output)
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].apply(utils.corregir_resumen)
     
-    # Mapeos
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
     df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
@@ -114,41 +103,23 @@ def run_full_process(dossier_file, config_file):
     is_internet = df['Tipo de Medio'] == 'Internet'
     df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
-    # --- 4. Reorganización de Columnas Específicas ---
+    # --- 4. Reorganización de Columnas ---
     progress_bar.progress(40, text="Paso 4/8: Reorganizando columnas de links y dimensiones...")
     is_print = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
     is_broadcast = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
     
-    # Intercambiar links para Internet si es necesario
     df.loc[is_internet, ['Link Nota', 'Link (Streaming - Imagen)']] = df.loc[is_internet, ['Link (Streaming - Imagen)', 'Link Nota']].values
-    # Copiar link para Prensa si 'Link Nota' está vacío
     cond_copy = is_print & df['Link Nota'].isnull() & df['Link (Streaming - Imagen)'].notnull()
     df.loc[cond_copy, 'Link Nota'] = df.loc[cond_copy, 'Link (Streaming - Imagen)']
-    df.loc[is_print | is_broadcast, 'Link (Streaming - Imagen)'] = None # Limpiar link de streaming para no-internet
+    df.loc[is_print | is_broadcast, 'Link (Streaming - Imagen)'] = None
     
-    # Mover 'Duración' a 'Dimensión' para Radio/TV
     if 'Duración - Nro. Caracteres' in df.columns and 'Dimensión' in df.columns:
         df.loc[is_broadcast, 'Dimensión'] = df.loc[is_broadcast, 'Duración - Nro. Caracteres']
         df.loc[is_broadcast, 'Duración - Nro. Caracteres'] = np.nan
 
-    # --- 5. Detección de Duplicados ---
-    progress_bar.progress(50, text="Paso 5/8: Detectando duplicados con criterio de calidad...")
-    df_reset = df.reset_index().rename(columns={'index': 'original_index'})
-    df_reset['title_quality'] = df_reset['Título'].apply(utils.calculate_title_quality_score)
-    df_reset.sort_values(by=['title_quality', 'Fecha', 'original_index'], ascending=[False, True, True], inplace=True)
-    
-    rows_list = df_reset.to_dict('records')
-    is_duplicate_map = {}
-    for i in range(len(rows_list)):
-        if rows_list[i]['original_index'] in is_duplicate_map: continue
-        for j in range(i + 1, len(rows_list)):
-            if rows_list[j]['original_index'] in is_duplicate_map: continue
-            
-            if utils.are_duplicates(pd.Series(rows_list[i]), pd.Series(rows_list[j])):
-                is_duplicate_map[rows_list[j]['original_index']] = True
-    
-    df_reset['is_duplicate'] = df_reset['original_index'].map(is_duplicate_map).fillna(False)
-    df = df_reset.sort_values('original_index').set_index('original_index')
+    # --- 5. Detección de Duplicados (OPTIMIZADO) ---
+    progress_bar.progress(50, text="Paso 5/8: Detectando duplicados (optimizado)...")
+    df = utils.detect_duplicates_optimized(df)
 
     # --- 6. Aplicación de Modelos de IA ---
     progress_bar.progress(70, text="Paso 6/8: Aplicando modelos de IA a noticias únicas...")
@@ -200,7 +171,6 @@ def run_full_process(dossier_file, config_file):
     final_cols_in_df = [col for col in final_order if col in df.columns]
     df_display = df[final_cols_in_df].copy()
     
-    # Formateo final para la visualización en Streamlit
     if 'Fecha' in df_display.columns:
         df_display['Fecha'] = pd.to_datetime(df_display['Fecha']).dt.strftime('%d/%m/%Y').replace('NaT', 'FECHA INVÁLIDA')
     
@@ -209,8 +179,8 @@ def run_full_process(dossier_file, config_file):
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v3.9")
-st.markdown("Herramienta para limpiar, enriquecer y analizar dossieres de noticias. **Versión con manejo de fechas mejorado y código refactorizado.**")
+st.title("🚀 Procesador Inteligente de Dossiers v4.0")
+st.markdown("Herramienta para limpiar, enriquecer y analizar dossieres de noticias. **Versión optimizada para alto volumen de datos.**")
 st.info("**Instrucciones:**\n\n1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n2. Sube ambos archivos en el área de abajo.\n3. Haz clic en '▶️ Iniciar Proceso Completo'.")
 
 with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
