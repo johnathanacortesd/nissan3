@@ -276,7 +276,7 @@ El archivo procesado incluye:
 
 ## 🤝 Contribuciones
 
-Este es un proyecto interno optimizado para procesamiento de dossiers.
+Este es un proyecto interno creado por Johnathan Cortés, optimizado para procesamiento de dossiers.
 
 ---
 
