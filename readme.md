@@ -2,6 +2,8 @@
 
 Herramienta automatizada para procesar, limpiar y analizar dossiers de noticias usando Machine Learning e Inteligencia Artificial.
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://nissan3-mu89mzqbp64tduunjbgdhx.streamlit.app/)
+
 ## 📋 ¿Qué hace esta aplicación?
 
 Este procesador toma archivos Excel con noticias y los enriquece automáticamente con:
