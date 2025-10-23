@@ -4,7 +4,7 @@ Herramienta automatizada para procesar, limpiar y analizar dossiers de noticias 
 
 ## 📋 ¿Qué hace esta aplicación?
 
-Este procesador toma archivos Excel con noticias y menciones de prensa, y los enriquece automáticamente con:
+Este procesador toma archivos Excel con noticias y los enriquece automáticamente con:
 
 - **Análisis de sentimiento** (Positivo/Neutro/Negativo)
 - **Clasificación automática de temas**
@@ -50,7 +50,129 @@ openpyxl
 joblib
 numpy
 nltk
+scikit-learn
 ```
+
+## 🧠 Modelos de Machine Learning
+
+### ¿Qué son los archivos .pkl?
+
+Los archivos `.pkl` (pickle) son modelos de Machine Learning **pre-entrenados y guardados** que contienen:
+
+- **El algoritmo completo** listo para usar
+- **Los parámetros aprendidos** durante el entrenamiento
+- **El pipeline de preprocesamiento** (limpieza, vectorización, etc.)
+
+**Ventaja**: No necesitas entrenar el modelo cada vez, solo cargarlo y usarlo instantáneamente.
+
+### 📦 pipeline_sentimiento.pkl
+
+**Función**: Analiza el sentimiento/tono de las noticias
+
+**Modelo usado**: **LinearSVC** (Support Vector Classifier lineal)
+- Algoritmo de clasificación supervisado muy eficiente
+- Optimizado con GridSearchCV para encontrar mejores parámetros
+- Parámetros ajustados: C (regularización), max_features, ngram_range
+
+**Entrada**: Título + Resumen de la noticia  
+**Salida**: Clasificación en 3 categorías:
+- `Positivo` (1)
+- `Neutro` (0)
+- `Negativo` (-1)
+
+**Cómo funciona**:
+1. Toma el texto combinado (título + resumen)
+2. **TF-IDF Vectorizer**: Convierte texto en vectores numéricos ponderados
+3. **LinearSVC**: Clasifica usando márgenes de separación óptimos
+4. Devuelve la etiqueta de sentimiento
+
+**Precisión esperada**: ~85-95% según calidad de datos de entrenamiento
+
+### 🏷️ pipeline_tema.pkl
+
+**Función**: Clasifica automáticamente el tema de cada noticia
+
+**Modelo usado**: **LinearSVC** (Support Vector Classifier lineal)
+- Entrenado en modo multiclase (múltiples categorías temáticas)
+- Filtra automáticamente clases con menos de 4 muestras
+- Optimizado con GridSearchCV (60K-70K features)
+
+**Entrada**: Texto preprocesado (sin stopwords en español, tokenizado)  
+**Salida**: Categoría temática (ej: "Ventas", "Producto", "Servicio Técnico", etc.)
+
+**Cómo funciona**:
+1. **Preprocesamiento**: Elimina stopwords (palabras vacías en español)
+2. **TF-IDF Vectorization**: ngrams (1,1) o (1,2) con min_df=2
+3. **LinearSVC**: Clasifica según patrones aprendidos con C=0.8-1.0
+4. Asigna la categoría más probable
+
+**Precisión esperada**: Variable según número de categorías (típicamente 70-90%)
+
+### 🔄 Pipeline completo
+
+Cada `.pkl` contiene un **pipeline de scikit-learn** optimizado:
+
+```python
+Pipeline([
+    ('tfidf', TfidfVectorizer(
+        ngram_range=(1, 2),        # Unigramas y bigramas
+        min_df=2,                  # Mínimo 2 documentos
+        max_features=65000,        # Máximo de características
+        token_pattern=r'\b\w+\b'   # Patrón de tokenización
+    )),
+    ('clf', LinearSVC(
+        C=1.0,                     # Regularización
+        random_state=42,           # Reproducibilidad
+        dual="auto"                # Optimización automática
+    ))
+])
+```
+
+**Ventajas de este pipeline**:
+- ✅ Procesa texto crudo directamente
+- ✅ No requiere pasos intermedios manuales
+- ✅ Optimizado con GridSearchCV (3-fold cross-validation)
+- ✅ Reproducible (random_state fijo)
+- ✅ Versiones estables (NumPy 1.26.4, scikit-learn 1.3.2)
+
+## 🎓 Entrenamiento de Modelos
+
+Si necesitas **re-entrenar** los modelos con tus propios datos:
+
+### Requisitos para entrenar:
+- Google Colab (recomendado) o entorno Python local
+- Archivo Excel con columnas: `resumen`, `tono`, `tema`
+- Mínimo 4 muestras por clase (el script filtra automáticamente)
+
+### Proceso de entrenamiento:
+
+1. **Ejecuta la Celda 1**: Instala dependencias estables
+   - NumPy 1.26.4, pandas 2.2.2, scikit-learn 1.3.2
+   - El entorno se reiniciará automáticamente
+
+2. **Ejecuta la Celda 2**: Entrena los modelos
+   - Sube tu archivo Excel de entrenamiento
+   - GridSearchCV optimiza hiperparámetros automáticamente
+   - Tiempo estimado: 5-30 minutos según tamaño de datos
+
+3. **Descarga**: Obtienes `modelos_optimizados.zip`
+   - Contiene: `pipeline_sentimiento.pkl` y `pipeline_tema.pkl`
+   - Listos para usar en la aplicación
+
+### Datos de entrenamiento:
+
+```
+| resumen                          | tono      | tema            |
+|----------------------------------|-----------|-----------------|
+| "Excelente servicio postventa"   | Positivo  | Servicio        |
+| "Presentan nuevo modelo SUV"     | Neutro    | Producto        |
+| "Retiro de vehículos por fallas" | Negativo  | Servicio Técnico|
+```
+
+**Notas importantes**:
+- El modelo de tema filtra clases con < 4 muestras automáticamente
+- Se usa validación cruzada (3-fold) para evitar overfitting
+- Los mejores parámetros se seleccionan automáticamente
 
 ## 📁 Estructura de `Configuracion.xlsx`
 
@@ -154,10 +276,9 @@ El archivo procesado incluye:
 
 ## 🤝 Contribuciones
 
-Este es un proyecto interno optimizado para procesamiento de alto volumen de dossiers de prensa.
+Este es un proyecto interno optimizado para procesamiento de dossiers.
 
-## 📄 Creado por Johnathan Cortés
-
+---
 
 **Versión**: 4.0  
 **Última actualización**: 2024  
