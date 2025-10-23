@@ -281,5 +281,5 @@ Este es un proyecto interno creado por Johnathan Cortés, optimizado para proces
 ---
 
 **Versión**: 4.0  
-**Última actualización**: 2024  
+**Última actualización**: Agosto de 2025  
 **Optimizado para**: Alto volumen de datos
