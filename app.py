@@ -92,7 +92,7 @@ def run_full_process(dossier_file, config_file):
         if df['Fecha'].isna().any():
             st.warning(f"⚠️ Atención: Algunas fechas no se pudieron convertir. Revisa el archivo original.")
 
-    df['Título Limpio'] = df['Título'].apply(utils.clean_title_for_output)
+    # MODIFICACIÓN: Se eliminó la línea que creaba 'Título Limpio'
     df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].apply(utils.corregir_resumen)
     
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
@@ -125,7 +125,8 @@ def run_full_process(dossier_file, config_file):
     progress_bar.progress(70, text="Paso 6/8: Aplicando modelos de IA a noticias únicas...")
     df_valid = df[~df['is_duplicate']].copy()
     if not df_valid.empty:
-        df_valid['texto_para_ia'] = df_valid['Título Limpio'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
+        # MODIFICACIÓN: Se usa 'Título' original en lugar de 'Título Limpio' para generar el texto de IA
+        df_valid['texto_para_ia'] = df_valid['Título'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
         
         preds_sent = sentiment_pipeline.predict(df_valid['texto_para_ia'])
         label_map_inv = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo'}
@@ -149,7 +150,9 @@ def run_full_process(dossier_file, config_file):
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
     
     df.loc[df['is_duplicate'], ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
-    df['Título'] = df['Título Limpio']
+    
+    # MODIFICACIÓN: Eliminada la línea que sobrescribía el Título
+    # df['Título'] = df['Título Limpio']  <-- ELIMINADA
 
     # --- 8. Generación de Resultados Finales ---
     progress_bar.progress(100, text="Paso 8/8: ¡Proceso completado!")
