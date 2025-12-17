@@ -1,4 +1,3 @@
-# dossier_utils.py
 import re
 import html
 import io
@@ -14,12 +13,22 @@ def convert_html_entities(text: str) -> str:
         return text
     text = html.unescape(text)
     custom_replacements = {
-        '“': '"', '”': '"', '‘': "'", '’': "'",
+        '"': '"', '"': '"', ''': "'", ''': "'",
         'Â': '', 'â': '', '€': '', '™': '', '�': ''
     }
     for entity, char in custom_replacements.items():
         text = text.replace(entity, char)
     return text
+
+def clean_title(title: str) -> str:
+    """
+    Limpia SOLO las entidades HTML del título, sin modificar su contenido.
+    Preserva guiones, pipes y todo el texto original.
+    """
+    if not isinstance(title, str):
+        return ""
+    # Solo decodifica entidades HTML, no elimina nada
+    return convert_html_entities(title)
 
 def clean_title_for_output(title: str) -> str:
     """Limpia un título para mostrarlo en el resultado final, eliminando pipes y tags."""
