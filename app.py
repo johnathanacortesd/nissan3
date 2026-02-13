@@ -91,29 +91,42 @@ def run_full_process(dossier_file, config_file):
         if df['Fecha'].isna().any():
             st.warning(f"⚠️ Atención: Algunas fechas no se pudieron convertir. Revisa el archivo original.")
 
-    # NUEVA LÍNEA: Limpieza de entidades HTML en la columna Título
+    # Limpieza de entidades HTML en la columna Título
     if 'Título' in df.columns:
         df['Título'] = df['Título'].apply(utils.clean_title)
     
-    df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].apply(utils.corregir_resumen)
+    if 'Resumen - Aclaracion' in df.columns:
+        df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].apply(utils.corregir_resumen)
     
     tipo_medio_map = {'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio', 'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'}
     df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
-    df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
-    df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
     
+    if 'Medio' in df.columns:
+        df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
+    
+    if 'Menciones - Empresa' in df.columns:
+        df['Menciones - Empresa'] = df['Menciones - Empresa'].astype(str).str.strip().map(mention_map).fillna(df['Menciones - Empresa'])
+    
+    # Mapeo de medios Internet
     is_internet = df['Tipo de Medio'] == 'Internet'
-    df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
+    if is_internet.any():
+        df.loc[is_internet, 'Medio'] = df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip().map(internet_map).fillna(df.loc[is_internet, 'Medio'])
 
     # --- 4. Reorganización de Columnas ---
     progress_bar.progress(40, text="Paso 4/8: Reorganizando columnas de links y dimensiones...")
     is_print = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
     is_broadcast = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
     
-    df.loc[is_internet, ['Link Nota', 'Link (Streaming - Imagen)']] = df.loc[is_internet, ['Link (Streaming - Imagen)', 'Link Nota']].values
-    cond_copy = is_print & df['Link Nota'].isnull() & df['Link (Streaming - Imagen)'].notnull()
-    df.loc[cond_copy, 'Link Nota'] = df.loc[cond_copy, 'Link (Streaming - Imagen)']
-    df.loc[is_print | is_broadcast, 'Link (Streaming - Imagen)'] = None
+    # Swap links for Internet
+    if 'Link Nota' in df.columns and 'Link (Streaming - Imagen)' in df.columns:
+        df.loc[is_internet, ['Link Nota', 'Link (Streaming - Imagen)']] = df.loc[is_internet, ['Link (Streaming - Imagen)', 'Link Nota']].values
+        
+        # Copy logic for print
+        cond_copy = is_print & df['Link Nota'].isnull() & df['Link (Streaming - Imagen)'].notnull()
+        df.loc[cond_copy, 'Link Nota'] = df.loc[cond_copy, 'Link (Streaming - Imagen)']
+        
+        # Clear streaming link for print/broadcast
+        df.loc[is_print | is_broadcast, 'Link (Streaming - Imagen)'] = None
     
     if 'Duración - Nro. Caracteres' in df.columns and 'Dimensión' in df.columns:
         df.loc[is_broadcast, 'Dimensión'] = df.loc[is_broadcast, 'Duración - Nro. Caracteres']
@@ -121,6 +134,7 @@ def run_full_process(dossier_file, config_file):
 
     # --- 5. Detección de Duplicados (OPTIMIZADO) ---
     progress_bar.progress(50, text="Paso 5/8: Detectando duplicados (optimizado)...")
+    # Usa la lógica corregida en dossier_utils
     df = utils.detect_duplicates_optimized(df)
 
     # --- 6. Aplicación de Modelos de IA ---
@@ -150,6 +164,7 @@ def run_full_process(dossier_file, config_file):
     if 'Temas Generales - Tema' in df.columns:
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
     
+    # Marca duplicados visualmente
     df.loc[df['is_duplicate'], ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
 
     # --- 8. Generación de Resultados Finales ---
