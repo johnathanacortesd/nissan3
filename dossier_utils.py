@@ -12,9 +12,11 @@ def convert_html_entities(text: str) -> str:
     if not isinstance(text, str):
         return text
     text = html.unescape(text)
+    # Corrección de comillas y caracteres especiales comunes en scraping
     custom_replacements = {
-        '"': '"', '"': '"', ''': "'", ''': "'",
-        'Â': '', 'â': '', '€': '', '™': '', '�': ''
+        '“': '"', '”': '"', '‘': "'", '’': "'",
+        'Â': '', 'â': '', '€': '', '™': '', '': '',
+        '\xa0': ' ' # Espacio de no separación
     }
     for entity, char in custom_replacements.items():
         text = text.replace(entity, char)
@@ -27,27 +29,48 @@ def clean_title(title: str) -> str:
     """
     if not isinstance(title, str):
         return ""
-    # Solo decodifica entidades HTML, no elimina nada
     return convert_html_entities(title)
 
 def clean_title_for_output(title: str) -> str:
-    """Limpia un título para mostrarlo en el resultado final, eliminando pipes y tags."""
+    """
+    Limpia un título para mostrarlo en el resultado final, eliminando pipes y tags.
+    MEJORA: Aplana saltos de línea antes de cortar para capturar sufijos multilinea.
+    """
     if not isinstance(title, str):
         return ""
     title = convert_html_entities(title)
+    # Aplanamos el texto para que el regex funcione aunque haya enters
+    title = title.replace('\n', ' ').replace('\r', ' ')
+    
     # Elimina todo desde un pipe '|' o un guion '-' hasta el final de la línea
-    title = re.sub(r'\s*[|-].*$', '', title).strip()
-    return title
+    # Se usa \s+ para asegurar que haya espacios antes del separador y no romper palabras compuestas (ej. Covid-19)
+    # Pero para pipes '|' somos más agresivos.
+    title = re.sub(r'\s+\|.*$', '', title) # Pipe con espacio antes
+    title = re.sub(r'\|\s+.*$', '', title) # Pipe sin espacio antes (raro pero posible)
+    title = re.sub(r'\s+-\s+.*$', '', title) # Guion con espacios a ambos lados (ej: Titulo - Medio)
+    
+    return title.strip()
 
 def normalize_title_for_comparison(title: str) -> str:
-    """Normaliza un título para una comparación robusta (minúsculas, sin puntuación)."""
+    """
+    Normaliza un título para una comparación robusta (minúsculas, sin puntuación).
+    MEJORA: Limpieza más profunda de basura al final del string.
+    """
     if not isinstance(title, str):
         return ""
+    
+    # 1. Limpieza base
     cleaned_title = clean_title_for_output(title)
+    
+    # 2. Expansión de abreviaturas comunes
     abbreviations = {'tm': 'transporte masivo'}
     for abbr, full_text in abbreviations.items():
         cleaned_title = re.sub(fr'\b{abbr}\b', full_text, cleaned_title, flags=re.IGNORECASE)
+    
+    # 3. Eliminar caracteres no alfanuméricos y pasar a minúsculas
+    # Esto une palabras si hay símbolos raros entre ellas, o las separa por espacio.
     normalized_title = re.sub(r'\W+', ' ', cleaned_title).lower().strip()
+    
     return normalized_title
 
 def corregir_resumen(text: str) -> str:
@@ -67,7 +90,12 @@ def preprocess_text_for_topic(text: str) -> str:
     """Preprocesa texto para el modelo de tópicos (quita stopwords y tokeniza)."""
     if not isinstance(text, str):
         return ""
-    stop_words_list = set(stopwords.words('spanish'))
+    try:
+        stop_words_list = set(stopwords.words('spanish'))
+    except:
+        # Fallback si nltk falla puntualmente
+        stop_words_list = set(['de', 'la', 'que', 'el', 'en', 'y', 'a', 'los', 'del', 'se', 'las', 'por', 'un', 'para', 'con', 'no', 'una', 'su', 'al', 'lo'])
+        
     token_pattern_re = re.compile(r"\b\w+\b", flags=re.UNICODE)
     tokens = token_pattern_re.findall(text.lower())
     return " ".join(tok for tok in tokens if tok not in stop_words_list)
@@ -112,41 +140,78 @@ def calculate_title_quality_score(title: str) -> int:
     if not isinstance(title, str):
         return -999
     score = 100
+    # Penalizar títulos sucios (entidades html, interrogaciones excesivas)
     score -= len(re.findall(r'&[#\w]+;', title)) * 10
     score -= title.count('??') * 5
-    score -= title.count('�') * 5
-    score -= len(title) * 0.01
+    score -= title.count('') * 5
+    # Preferimos títulos más cortos si la diferencia es solo basura extra
+    # Pero no demasiado cortos.
+    if len(title) > 200: score -= 5 
+    if len(title) < 15: score -= 20
+    
+    # Penalizar títulos con saltos de línea o pipes evidentes
+    if '\n' in title: score -= 15
+    if '|' in title: score -= 5
+    
     return int(score)
 
 def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=0.85, date_proximity_days=1) -> bool:
     """
-    Compara dos filas para determinar si son duplicadas. Asume que 'Medio' y 'Mención' ya coinciden.
+    Compara dos filas para determinar si son duplicadas. 
+    Asume que 'Medio' y 'Mención' ya coinciden (por el groupby previo).
     """
     titulo1 = normalize_title_for_comparison(row1['Título'])
     titulo2 = normalize_title_for_comparison(row2['Título'])
     
+    # Validación rápida: si normalizados son idénticos
+    if titulo1 == titulo2 and len(titulo1) > 5:
+        return True
+
     fecha1 = row1['Fecha']
     fecha2 = row2['Fecha']
+    
+    # Validación de Fechas
     if pd.isna(fecha1) or pd.isna(fecha2):
-        return False
+        return False # Ante la duda, no es duplicado
 
+    is_duplicate_candidate = False
+
+    # Lógica por tipo de medio
     if row1['Tipo de Medio'] == 'Internet':
-        if 'Hora' in row1 and 'Hora' in row2 and row1['Hora'] == row2['Hora']:
-             return False
-        if abs((fecha1 - fecha2).days) > date_proximity_days:
+        # Para internet permitimos diferencia de días
+        if abs((fecha1 - fecha2).days) <= date_proximity_days:
+            # Si tienen hora y es idéntica, es muy probable que sea duplicado
+            if 'Hora' in row1 and 'Hora' in row2 and pd.notna(row1['Hora']) and row1['Hora'] == row2['Hora']:
+                 is_duplicate_candidate = True # Refuerza la posibilidad, pero chequeamos título
+            else:
+                 is_duplicate_candidate = True
+        else:
             return False
-        
-        if titulo1 == titulo2 and titulo1 != "": return True
-        similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
-        if similarity >= title_similarity_threshold: return True
-    else: # Prensa, Radio, TV, etc.
+    else: 
+        # Prensa, Radio, TV: fecha exacta requerida habitualmente
         if fecha1.date() != fecha2.date():
             return False
+        # En Radio/TV, horas distintas suelen ser programas distintos (reposiciones o noticieros diferentes)
         if row1['Tipo de Medio'] in ['Radio', 'Televisión']:
             if 'Hora' in row1 and 'Hora' in row2 and row1['Hora'] != row2['Hora']:
                 return False
-        
-        if titulo1 == titulo2 and titulo1 != "": return True
+        is_duplicate_candidate = True
+
+    if not is_duplicate_candidate:
+        return False
+
+    # --- Comparación Avanzada de Títulos ---
+    
+    # 1. Contención (Substring): Soluciona el caso "Titulo" vs "Titulo | ACIS"
+    # Solo aplicamos si los títulos tienen una longitud mínima para evitar falsos positivos con palabras cortas
+    if len(titulo1) > 15 and len(titulo2) > 15:
+        if titulo1 in titulo2 or titulo2 in titulo1:
+            return True
+
+    # 2. Similaridad Difusa (SequenceMatcher)
+    similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
+    if similarity >= title_similarity_threshold:
+        return True
             
     return False
 
@@ -154,9 +219,13 @@ def detect_duplicates_optimized(df: pd.DataFrame) -> pd.DataFrame:
     """
     Detecta duplicados de forma eficiente usando una estrategia de 'groupby'.
     """
-    df = df.reset_index().rename(columns={'index': 'original_index'})
+    # Preservar índice original
+    df = df.reset_index(drop=True).reset_index().rename(columns={'index': 'original_index'})
+    
+    # Calcular calidad para priorizar cuál conservar
     df['title_quality'] = df['Título'].apply(calculate_title_quality_score)
     
+    # Ordenar: Mejor calidad primero, luego fecha más reciente, luego índice original
     df.sort_values(
         by=['title_quality', 'Fecha', 'original_index'],
         ascending=[False, True, True],
@@ -164,6 +233,7 @@ def detect_duplicates_optimized(df: pd.DataFrame) -> pd.DataFrame:
         na_position='last'
     )
     
+    # Agrupamos estrictamente por Medio y Mención como bloque duro
     grouping_keys = ['Medio', 'Menciones - Empresa']
     duplicate_indices = set()
     
@@ -174,19 +244,23 @@ def detect_duplicates_optimized(df: pd.DataFrame) -> pd.DataFrame:
             
         group_rows = group.to_dict('records')
         
-        # Bucle anidado solo dentro del grupo pequeño
+        # Bucle anidado solo dentro del grupo pequeño (eficiente)
         for i in range(len(group_rows)):
-            if group_rows[i]['original_index'] in duplicate_indices:
+            current_row = group_rows[i]
+            if current_row['original_index'] in duplicate_indices:
                 continue
             
             for j in range(i + 1, len(group_rows)):
-                if group_rows[j]['original_index'] in duplicate_indices:
+                compare_row = group_rows[j]
+                if compare_row['original_index'] in duplicate_indices:
                     continue
 
-                if are_duplicates(pd.Series(group_rows[i]), pd.Series(group_rows[j])):
-                    # La fila 'j' se marca como duplicado porque el df está ordenado por calidad
-                    duplicate_indices.add(group_rows[j]['original_index'])
+                # Aquí se invoca la lógica mejorada de comparación
+                if are_duplicates(pd.Series(current_row), pd.Series(compare_row)):
+                    # Marcamos 'j' como duplicado porque el df ya está ordenado por calidad/prioridad
+                    duplicate_indices.add(compare_row['original_index'])
 
     df['is_duplicate'] = df['original_index'].isin(duplicate_indices)
     
+    # Restaurar orden original y limpiar columnas auxiliares
     return df.sort_values('original_index').set_index('original_index').drop(columns=['title_quality'])
