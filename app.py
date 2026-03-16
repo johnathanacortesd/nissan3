@@ -15,18 +15,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Estilos CSS modernos: blanco con acentos teal/verde profesional ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
 
-    html, body, [class*="css"] {
-        font-family: 'DM Sans', sans-serif;
-    }
+    html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
-    .stApp {
-        background-color: #F7F9F8;
-    }
+    .stApp { background-color: #F7F9F8; }
 
     #MainMenu, footer, header { visibility: hidden; }
     .block-container {
@@ -135,7 +130,7 @@ st.markdown("""
         letter-spacing: 0.03em;
     }
     .metric-card.accent .metric-value { color: #1A7A5E; }
-    .metric-card.muted .metric-value { color: #9BB5AC; }
+    .metric-card.muted  .metric-value { color: #9BB5AC; }
 
     /* ── BANNER DE ÉXITO ── */
     .success-banner {
@@ -148,10 +143,7 @@ st.markdown("""
         margin: 1.5rem 0;
         box-shadow: 0 2px 12px rgba(13,79,60,0.2);
     }
-    .success-banner .icon {
-        font-size: 1.6rem;
-        line-height: 1;
-    }
+    .success-banner .icon { font-size: 1.6rem; line-height: 1; }
     .success-banner .text strong {
         display: block;
         color: #FFFFFF;
@@ -172,8 +164,7 @@ st.markdown("""
         margin-bottom: 0.8rem;
     }
     .step-num {
-        min-width: 28px;
-        height: 28px;
+        min-width: 28px; height: 28px;
         background: #1A7A5E;
         color: white;
         border-radius: 50%;
@@ -194,9 +185,7 @@ st.markdown("""
         padding: 0.5rem;
         transition: border-color 0.2s;
     }
-    [data-testid="stFileUploader"]:hover {
-        border-color: #1A7A5E;
-    }
+    [data-testid="stFileUploader"]:hover { border-color: #1A7A5E; }
 
     /* ── BOTÓN PRIMARIO ── */
     .stButton > button[kind="primary"] {
@@ -246,22 +235,8 @@ st.markdown("""
     }
 
     /* ── ALERTAS ── */
-    .stSuccess {
-        background: #F0F7F4;
-        border: 1px solid #B2D4C8;
-        border-radius: 10px;
-        color: #0D4F3C;
-    }
-    .stWarning {
-        background: #FFF8ED;
-        border: 1px solid #F5C97A;
-        border-radius: 10px;
-    }
-    .stError {
-        background: #FEF2F2;
-        border: 1px solid #FCA5A5;
-        border-radius: 10px;
-    }
+    .stWarning { background: #FFF8ED; border: 1px solid #F5C97A; border-radius: 10px; }
+    .stError   { background: #FEF2F2; border: 1px solid #FCA5A5; border-radius: 10px; }
 
     /* ── PROGRESS BAR ── */
     .stProgress > div > div > div {
@@ -284,12 +259,7 @@ st.markdown("""
         border: 1px solid #E8EFEC;
     }
 
-    hr {
-        border: none;
-        border-top: 1px solid #E8EFEC;
-        margin: 1.5rem 0;
-    }
-
+    hr { border: none; border-top: 1px solid #E8EFEC; margin: 1.5rem 0; }
     .stSpinner > div { border-top-color: #1A7A5E !important; }
 
     /* ── FILE STATUS ── */
@@ -303,16 +273,8 @@ st.markdown("""
         font-weight: 500;
         margin-top: 0.5rem;
     }
-    .file-status.ok {
-        background: #F0F7F4;
-        color: #0D4F3C;
-        border: 1px solid #B2D4C8;
-    }
-    .file-status.missing {
-        background: #FFF8ED;
-        color: #92400E;
-        border: 1px solid #F5C97A;
-    }
+    .file-status.ok      { background: #F0F7F4; color: #0D4F3C; border: 1px solid #B2D4C8; }
+    .file-status.missing { background: #FFF8ED; color: #92400E; border: 1px solid #F5C97A; }
 
     .results-header {
         font-size: 1.1rem;
@@ -339,7 +301,6 @@ except LookupError:
 
 @st.cache_resource
 def load_ml_models():
-    """Carga los pipelines completos de sentimiento y tema."""
     try:
         sentiment_pipeline = joblib.load('pipeline_sentimiento.pkl')
         topic_pipeline = joblib.load('pipeline_tema.pkl')
@@ -354,7 +315,6 @@ def load_ml_models():
 
 
 def read_and_expand_dossier(dossier_file):
-    """Lee el archivo Excel, extrae hyperlinks y expande las filas por mención."""
     wb = load_workbook(dossier_file)
     sheet = wb.active
     original_headers = [cell.value for cell in sheet[1] if cell.value]
@@ -385,11 +345,15 @@ def read_and_expand_dossier(dossier_file):
     return pd.DataFrame(rows_data)
 
 
-def run_full_process(dossier_file, config_file):
+def run_full_process(dossier_file, config_file, download_placeholder):
+    """
+    Ejecuta el proceso completo y al finalizar rellena download_placeholder
+    con el botón de descarga, que queda justo al lado de 'Iniciar proceso'.
+    """
     st.markdown("<hr>", unsafe_allow_html=True)
     progress_bar = st.progress(0, text="Iniciando proceso...")
 
-    # --- 1. Carga de modelos y configuración ---
+    # --- 1. Modelos y configuración ---
     progress_bar.progress(5, text="Paso 1 / 8 — Cargando modelos y configuración...")
     sentiment_pipeline, topic_pipeline = load_ml_models()
 
@@ -415,11 +379,11 @@ def run_full_process(dossier_file, config_file):
         st.error(f"**Error al cargar `Configuracion.xlsx`:** {e}")
         st.stop()
 
-    # --- 2. Lectura y Expansión del Dossier ---
+    # --- 2. Lectura y expansión ---
     progress_bar.progress(15, text="Paso 2 / 8 — Leyendo Dossier y expandiendo filas...")
     df = read_and_expand_dossier(dossier_file)
 
-    # --- 3. Limpieza y Normalización de Datos ---
+    # --- 3. Limpieza y normalización ---
     progress_bar.progress(25, text="Paso 3 / 8 — Aplicando mapeos y normalizaciones...")
     if 'Fecha' in df.columns:
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce', dayfirst=True)
@@ -462,9 +426,9 @@ def run_full_process(dossier_file, config_file):
             .fillna(df.loc[is_internet, 'Medio'])
         )
 
-    # --- 4. Reorganización de Columnas ---
+    # --- 4. Reorganización de columnas ---
     progress_bar.progress(40, text="Paso 4 / 8 — Reorganizando columnas de links y dimensiones...")
-    is_print = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
+    is_print     = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
     is_broadcast = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
 
     if 'Link Nota' in df.columns and 'Link (Streaming - Imagen)' in df.columns:
@@ -479,18 +443,17 @@ def run_full_process(dossier_file, config_file):
         df.loc[is_broadcast, 'Dimensión'] = df.loc[is_broadcast, 'Duración - Nro. Caracteres']
         df.loc[is_broadcast, 'Duración - Nro. Caracteres'] = np.nan
 
-    # --- 5. Detección de Duplicados ---
+    # --- 5. Detección de duplicados ---
     progress_bar.progress(50, text="Paso 5 / 8 — Detectando duplicados...")
     df = utils.detect_duplicates_optimized(df)
 
-    # --- 6. Aplicación de Modelos de IA ---
+    # --- 6. Modelos de IA ---
     progress_bar.progress(70, text="Paso 6 / 8 — Aplicando modelos de IA a noticias únicas...")
     df_valid = df[~df['is_duplicate']].copy()
     if not df_valid.empty:
         df_valid['texto_para_ia'] = (
             df_valid['Título'].fillna('') + ' ' + df_valid['Resumen - Aclaracion'].fillna('')
         )
-
         preds_sent = sentiment_pipeline.predict(df_valid['texto_para_ia'])
         label_map_inv = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo'}
         df_valid['Tono'] = [label_map_inv.get(p, 'Indefinido') for p in preds_sent]
@@ -499,10 +462,9 @@ def run_full_process(dossier_file, config_file):
             utils.preprocess_text_for_topic
         )
         df_valid['Temas Generales - Tema'] = topic_pipeline.predict(df_valid['resumen_procesado'])
-
         df.update(df_valid[['Tono', 'Temas Generales - Tema']])
 
-    # --- 7. Homogeneización de Temas y Mapeo Final ---
+    # --- 7. Homogeneización de temas ---
     progress_bar.progress(85, text="Paso 7 / 8 — Homogeneizando y mapeando temas...")
     df_valid_homog = df[~df['is_duplicate']].copy()
     if not df_valid_homog.empty and 'Temas Generales - Tema' in df_valid_homog.columns:
@@ -533,7 +495,7 @@ def run_full_process(dossier_file, config_file):
             df.loc[mask_dup, 'Tema'] = '-'
         df.loc[mask_dup, 'Tono'] = 'Duplicada'
 
-    # --- 8. Resultados Finales ---
+    # --- 8. Resultados ---
     progress_bar.progress(100, text="✓ Proceso completado")
 
     final_order = [
@@ -544,13 +506,23 @@ def run_full_process(dossier_file, config_file):
         "Link (Streaming - Imagen)", "Menciones - Empresa"
     ]
 
-    total = len(df)
-    dups_count = int(mask_dup.sum())
+    total       = len(df)
+    dups_count  = int(mask_dup.sum())
     unique_count = total - dups_count
-    filename = f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    excel_data = utils.to_excel_from_df(df, final_order)
+    filename    = f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    excel_data  = utils.to_excel_from_df(df, final_order)
 
-    # Banner de éxito
+    # ── Rellenar el placeholder con el botón de descarga ──────────────────────
+    # Esto reemplaza el botón deshabilitado que estaba al lado de "Iniciar proceso"
+    with download_placeholder:
+        st.download_button(
+            label="⬇ Descargar archivo procesado (.xlsx)",
+            data=excel_data,
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    # Banner de éxito (debajo del proceso, no necesita scroll adicional)
     st.markdown(f"""
     <div class="success-banner">
         <div class="icon">⚡</div>
@@ -580,19 +552,6 @@ def run_full_process(dossier_file, config_file):
     </div>
     """, unsafe_allow_html=True)
 
-    # Botones: Iniciar (deshabilitado visualmente) | Descargar — lado a lado
-    st.markdown('<p class="results-header">Descarga</p>', unsafe_allow_html=True)
-    btn_col1, btn_col2 = st.columns(2)
-    with btn_col1:
-        st.button("✓ Proceso completado", disabled=True, type="primary")
-    with btn_col2:
-        st.download_button(
-            label="⬇ Descargar archivo procesado (.xlsx)",
-            data=excel_data,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
     # Previsualización
     st.markdown('<p class="results-header">Previsualización de resultados</p>', unsafe_allow_html=True)
     final_cols_in_df = [col for col in final_order if col in df.columns]
@@ -612,7 +571,6 @@ def run_full_process(dossier_file, config_file):
 # INTERFAZ PRINCIPAL
 # ==============================================================================
 
-# Header
 st.markdown("""
 <div class="app-header">
     <div class="badge">Nissan · Media Intelligence</div>
@@ -621,7 +579,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Instrucciones
 st.markdown("""
 <div class="card">
     <div class="card-title">Cómo usar esta herramienta</div>
@@ -635,16 +592,11 @@ st.markdown("""
     </div>
     <div class="step">
         <div class="step-num">3</div>
-        <div class="step-text">Haz clic en <strong>Iniciar proceso</strong> y espera a que finalice el análisis.</div>
-    </div>
-    <div class="step">
-        <div class="step-num">4</div>
-        <div class="step-text">Descarga el archivo final desde el botón que aparece al lado del estado del proceso.</div>
+        <div class="step-text">Haz clic en <strong>Iniciar proceso</strong>. Al finalizar, el botón de descarga aparecerá justo a su lado.</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Estructura de configuración
 with st.expander("📋  Ver estructura requerida para Configuracion.xlsx"):
     st.markdown("""
     | Hoja | Columna A | Columna B |
@@ -701,7 +653,9 @@ if uploaded_files:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Botones principales: Iniciar | Descargar (descargar aparece solo tras el proceso)
+# ── Fila de botones: Iniciar | Descargar ──────────────────────────────────────
+# col_download usa st.empty() para que run_full_process lo rellene
+# con el botón real en cuanto el Excel esté listo.
 col_start, col_download = st.columns(2)
 
 with col_start:
@@ -711,16 +665,16 @@ with col_start:
         type="primary"
     )
 
-# El placeholder en col_download se rellena dentro de run_full_process
-# tras generar el Excel. Para mantener el layout simétrico mostramos
-# un botón inactivo mientras no se ha procesado nada.
 with col_download:
+    # Placeholder vacío: run_full_process lo reemplaza con el download_button
+    download_placeholder = st.empty()
     if not start_clicked:
-        st.button(
-            "⬇ Descargar archivo procesado (.xlsx)",
-            disabled=True,
-            type="primary"
-        )
+        with download_placeholder:
+            st.button(
+                "⬇ Descargar archivo procesado (.xlsx)",
+                disabled=True,
+                type="primary"
+            )
 
 if start_clicked:
-    run_full_process(dossier_file, config_file)
+    run_full_process(dossier_file, config_file, download_placeholder)
