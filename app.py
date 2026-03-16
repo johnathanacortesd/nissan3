@@ -18,6 +18,7 @@ except LookupError:
         nltk.download('stopwords')
     st.success("Recursos listos.")
 
+
 # ==============================================================================
 # FUNCIONES DE CARGA Y PROCESO PRINCIPAL
 # ==============================================================================
@@ -32,9 +33,11 @@ def load_ml_models():
     except FileNotFoundError as e:
         st.error(
             f"Error Crítico: No se encontró el archivo de modelo: {e.filename}. "
-            "Asegúrate de que 'pipeline_sentimiento.pkl' y 'pipeline_tema.pkl' estén en la misma carpeta."
+            "Asegúrate de que 'pipeline_sentimiento.pkl' y 'pipeline_tema.pkl' "
+            "estén en la misma carpeta."
         )
         st.stop()
+
 
 def read_and_expand_dossier(dossier_file):
     """Lee el archivo Excel, extrae hyperlinks y expande las filas por mención."""
@@ -67,6 +70,7 @@ def read_and_expand_dossier(dossier_file):
 
     return pd.DataFrame(rows_data)
 
+
 def run_full_process(dossier_file, config_file):
     st.markdown("---")
     progress_bar = st.progress(0, text="Iniciando proceso...")
@@ -74,6 +78,7 @@ def run_full_process(dossier_file, config_file):
     # --- 1. Carga de modelos y configuración ---
     progress_bar.progress(5, text="Paso 1/8: Cargando modelos y configuración...")
     sentiment_pipeline, topic_pipeline = load_ml_models()
+
     try:
         config_sheets = pd.read_excel(config_file, sheet_name=None)
         region_map = pd.Series(
@@ -114,10 +119,19 @@ def run_full_process(dossier_file, config_file):
         df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].apply(utils.corregir_resumen)
 
     tipo_medio_map = {
-        'online': 'Internet', 'diario': 'Prensa', 'am': 'Radio', 'fm': 'Radio',
-        'aire': 'Televisión', 'cable': 'Televisión', 'revista': 'Revista'
+        'online': 'Internet',
+        'diario': 'Prensa',
+        'am': 'Radio',
+        'fm': 'Radio',
+        'aire': 'Televisión',
+        'cable': 'Televisión',
+        'revista': 'Revista'
     }
-    df['Tipo de Medio'] = df['Tipo de Medio'].str.lower().str.strip().map(tipo_medio_map).fillna(df['Tipo de Medio'])
+    df['Tipo de Medio'] = (
+        df['Tipo de Medio'].str.lower().str.strip()
+        .map(tipo_medio_map)
+        .fillna(df['Tipo de Medio'])
+    )
 
     if 'Medio' in df.columns:
         df['Región'] = df['Medio'].astype(str).str.lower().str.strip().map(region_map)
@@ -125,14 +139,16 @@ def run_full_process(dossier_file, config_file):
     if 'Menciones - Empresa' in df.columns:
         df['Menciones - Empresa'] = (
             df['Menciones - Empresa'].astype(str).str.strip()
-            .map(mention_map).fillna(df['Menciones - Empresa'])
+            .map(mention_map)
+            .fillna(df['Menciones - Empresa'])
         )
 
     is_internet = df['Tipo de Medio'] == 'Internet'
     if is_internet.any():
         df.loc[is_internet, 'Medio'] = (
             df.loc[is_internet, 'Medio'].astype(str).str.lower().str.strip()
-            .map(internet_map).fillna(df.loc[is_internet, 'Medio'])
+            .map(internet_map)
+            .fillna(df.loc[is_internet, 'Medio'])
         )
 
     # --- 4. Reorganización de Columnas ---
@@ -144,7 +160,6 @@ def run_full_process(dossier_file, config_file):
         df.loc[is_internet, ['Link Nota', 'Link (Streaming - Imagen)']] = (
             df.loc[is_internet, ['Link (Streaming - Imagen)', 'Link Nota']].values
         )
-
         cond_copy = is_print & df['Link Nota'].isnull() & df['Link (Streaming - Imagen)'].notnull()
         df.loc[cond_copy, 'Link Nota'] = df.loc[cond_copy, 'Link (Streaming - Imagen)']
         df.loc[is_print | is_broadcast, 'Link (Streaming - Imagen)'] = None
@@ -169,8 +184,10 @@ def run_full_process(dossier_file, config_file):
         label_map_inv = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo'}
         df_valid['Tono'] = [label_map_inv.get(p, 'Indefinido') for p in preds_sent]
 
-        df_valid["resumen_procesado"] = df_valid["texto_para_ia"].apply(utils.preprocess_text_for_topic)
-        df_valid["Temas Generales - Tema"] = topic_pipeline.predict(df_valid["resumen_procesado"])
+        df_valid['resumen_procesado'] = df_valid['texto_para_ia'].apply(
+            utils.preprocess_text_for_topic
+        )
+        df_valid['Temas Generales - Tema'] = topic_pipeline.predict(df_valid['resumen_procesado'])
 
         df.update(df_valid[['Tono', 'Temas Generales - Tema']])
 
@@ -188,22 +205,22 @@ def run_full_process(dossier_file, config_file):
         df.update(df_valid_homog[['Temas Generales - Tema']])
 
     if 'Temas Generales - Tema' in df.columns:
-        df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
+        df['Tema'] = (
+            df['Temas Generales - Tema'].astype(str).str.strip()
+            .map(final_topic_map)
+            .fillna('Indefinido')
+        )
 
-    # --- Propagación de valores desde originales hacia duplicadas ---
-    # Las filas duplicadas heredan Tema y Temas Generales - Tema de su fila original.
-    # SOLO la columna Tono se marca como "Duplicada".
-    if df['is_duplicate'].any() and 'source_index' in df.columns:
-        cols_to_propagate = ['Tema', 'Temas Generales - Tema']
-        for col in cols_to_propagate:
-            if col in df.columns:
-                df.loc[df['is_duplicate'], col] = (
-                    df.loc[df['is_duplicate'], 'source_index']
-                    .map(df[col])
-                )
-
-    # Marca duplicados SOLO en la columna Tono
-    df.loc[df['is_duplicate'], 'Tono'] = 'Duplicada'
+    # --- Marcado final de duplicadas ---
+    # Las filas duplicadas muestran "-" en Tema y Temas Generales - Tema,
+    # y "Duplicada" SOLO en la columna Tono.
+    mask_dup = df['is_duplicate']
+    if mask_dup.any():
+        if 'Temas Generales - Tema' in df.columns:
+            df.loc[mask_dup, 'Temas Generales - Tema'] = '-'
+        if 'Tema' in df.columns:
+            df.loc[mask_dup, 'Tema'] = '-'
+        df.loc[mask_dup, 'Tono'] = 'Duplicada'
 
     # --- 8. Generación de Resultados Finales ---
     progress_bar.progress(100, text="Paso 8/8: ¡Proceso completado!")
@@ -216,13 +233,12 @@ def run_full_process(dossier_file, config_file):
         "Temas Generales - Tema", "Resumen - Aclaracion", "Link Nota",
         "Link (Streaming - Imagen)", "Menciones - Empresa"
     ]
-    # Nota: 'is_duplicate' y 'source_index' no están en final_order, por lo que
-    # no aparecerán en el Excel ni en la previsualización.
+    # Nota: 'is_duplicate' no está en final_order → no aparece en Excel ni previsualización.
 
     st.subheader("📊 Resumen del Proceso")
     col1, col2, col3 = st.columns(3)
     col1.metric("Filas Totales Procesadas", len(df))
-    dups_count = df['is_duplicate'].sum()
+    dups_count = int(df['is_duplicate'].sum())
     col2.metric("Filas Marcadas como Duplicadas", dups_count)
     col3.metric("Filas Únicas Analizadas", len(df) - dups_count)
 
@@ -240,10 +256,13 @@ def run_full_process(dossier_file, config_file):
 
     if 'Fecha' in df_display.columns:
         df_display['Fecha'] = (
-            pd.to_datetime(df_display['Fecha']).dt.strftime('%d/%m/%Y').replace('NaT', 'FECHA INVÁLIDA')
+            pd.to_datetime(df_display['Fecha'])
+            .dt.strftime('%d/%m/%Y')
+            .replace('NaT', 'FECHA INVÁLIDA')
         )
 
     st.dataframe(df_display, use_container_width=True, hide_index=True)
+
 
 # ==============================================================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
@@ -273,7 +292,9 @@ uploaded_files = st.file_uploader(
     type=["xlsx"],
     accept_multiple_files=True
 )
+
 dossier_file, config_file = None, None
+
 if uploaded_files:
     for file in uploaded_files:
         if 'config' in file.name.lower():
