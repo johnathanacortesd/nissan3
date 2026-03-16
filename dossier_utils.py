@@ -45,15 +45,32 @@ def clean_title_for_output(title: str) -> str:
 
 
 def normalize_title_for_comparison(title: str) -> str:
-    """Normaliza un título para una comparación robusta (minúsculas, sin puntuación)."""
+    """
+    Normaliza un título para una comparación robusta.
+    Convierte a minúsculas, elimina puntuación y caracteres especiales,
+    lo que permite detectar variantes como tildes, apóstrofes, etc.
+    Ejemplo: 'Women's Car' y 'Womens Car' quedan iguales tras normalizar.
+    """
     if not isinstance(title, str):
         return ""
     cleaned_title = clean_title_for_output(title)
     abbreviations = {'tm': 'transporte masivo'}
     for abbr, full_text in abbreviations.items():
         cleaned_title = re.sub(fr'\b{abbr}\b', full_text, cleaned_title, flags=re.IGNORECASE)
+    # Elimina TODO carácter no alfanumérico (incluye tildes, apóstrofes, etc.)
     normalized_title = re.sub(r'\W+', ' ', cleaned_title).lower().strip()
     return normalized_title
+
+
+def normalize_url(url) -> str:
+    """
+    Normaliza una URL para comparación: minúsculas, sin espacios, sin trailing slash.
+    Retorna cadena vacía si no es una URL válida.
+    """
+    if not isinstance(url, str):
+        return ""
+    url = url.strip().lower().rstrip('/')
+    return url if url.startswith('http') else ""
 
 
 def corregir_resumen(text: str) -> str:
@@ -151,11 +168,26 @@ def are_duplicates(
     date_proximity_days=1
 ) -> bool:
     """
-    Determina si dos filas son duplicadas.
-    REGLA CLAVE:
-    - Internet: Permite ventana de días, limpieza de títulos agresiva.
-    - Radio/TV: Fecha exacta y HORA debe coincidir (o ser nula).
-      Si Hora es diferente, NO es duplicado.
+    Determina si dos filas son duplicadas según las siguientes reglas:
+
+    REGLAS GENERALES (todos los medios):
+    - Deben pertenecer al mismo Medio y Mención (el agrupamiento ya lo garantiza).
+    - Las fechas deben estar dentro de la ventana permitida por tipo de medio.
+
+    REGLAS POR TIPO DE MEDIO:
+    - Internet:
+        * Ventana de fecha flexible (date_proximity_days).
+        * CONDICIÓN 1: Títulos iguales/similares tras normalización (incluyendo
+          variantes con caracteres especiales, tildes, apóstrofes).
+          Ejemplo: 'Women's Car' ≈ 'Womens Car' → duplicada.
+        * CONDICIÓN 2 (nueva): Mismo Link (Streaming - Imagen) normalizado
+          + títulos iguales/similares → duplicada.
+          Ambas condiciones son independientes: basta con que una se cumpla.
+    - Radio/TV:
+        * Fecha exacta requerida.
+        * Si ambas tienen Hora y son distintas → NO es duplicada.
+    - Prensa/Revista y otros:
+        * Fecha exacta requerida.
     """
     titulo1 = normalize_title_for_comparison(row1['Título'])
     titulo2 = normalize_title_for_comparison(row2['Título'])
@@ -171,6 +203,7 @@ def are_duplicates(
 
     tipo_medio = row1['Tipo de Medio']
 
+    # --- Validación de ventana temporal por tipo de medio ---
     if tipo_medio == 'Internet':
         if abs((fecha1 - fecha2).days) > date_proximity_days:
             return False
@@ -185,24 +218,52 @@ def are_duplicates(
                 return False
 
     else:
+        # Prensa, Revista, etc.
         if fecha1.date() != fecha2.date():
             return False
 
+    # --- Comparación de Títulos (aplica a todos los medios) ---
+
+    titles_match = False
+
     # 1. Coincidencia exacta post-normalización
     if titulo1 == titulo2:
-        return True
+        titles_match = True
 
-    # 2. Contención (Substring)
-    if len(titulo1) > 15 and len(titulo2) > 15:
+    # 2. Contención (Substring) — para "Titulo" vs "Titulo | Medio"
+    if not titles_match and len(titulo1) > 15 and len(titulo2) > 15:
         if titulo1 in titulo2 or titulo2 in titulo1:
-            return True
+            titles_match = True
 
-    # 3. Similaridad difusa
-    similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
-    if similarity >= title_similarity_threshold:
+    # 3. Similaridad difusa — captura variantes con caracteres especiales
+    if not titles_match:
+        similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
+        if similarity >= title_similarity_threshold:
+            titles_match = True
+
+    if not titles_match:
+        return False
+
+    # Si los títulos coinciden, para medios no-Internet ya es suficiente
+    if tipo_medio != 'Internet':
         return True
 
-    return False
+    # --- Lógica adicional para Internet: verificación de URL ---
+    # Para Internet, título similar ya es suficiente para marcar como duplicada.
+    # Adicionalmente, mismo URL refuerza la detección (ya cubierta por titles_match).
+    # La URL se usa como señal de respaldo para casos donde el título difiere levemente
+    # pero la URL es idéntica (mismo artículo publicado con variante de título).
+    url_col = 'Link (Streaming - Imagen)'
+    url1 = normalize_url(row1.get(url_col, ''))
+    url2 = normalize_url(row2.get(url_col, ''))
+
+    if url1 and url2 and url1 == url2:
+        # Mismo enlace → duplicada confirmada (el título ya era similar)
+        return True
+
+    # Título similar pero URLs distintas → igual se marca como duplicada
+    # (misma noticia republicada con URL diferente)
+    return True
 
 
 def detect_duplicates_optimized(df: pd.DataFrame) -> pd.DataFrame:
