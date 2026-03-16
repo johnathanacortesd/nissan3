@@ -33,53 +33,43 @@ st.markdown("""
     /* ── HEADER ── */
     .app-header {
         background: linear-gradient(135deg, #0D4F3C 0%, #1A7A5E 60%, #22A37A 100%);
-        border-radius: 16px;
-        padding: 2.5rem 2.8rem;
-        margin-bottom: 2rem;
+        border-radius: 12px;
+        padding: 1.1rem 1.8rem;
+        margin-bottom: 1.2rem;
         position: relative;
         overflow: hidden;
+        display: flex;
+        align-items: center;
+        gap: 1.2rem;
     }
     .app-header::before {
         content: '';
         position: absolute;
-        top: -40px; right: -40px;
-        width: 200px; height: 200px;
+        top: -30px; right: -30px;
+        width: 120px; height: 120px;
         background: rgba(255,255,255,0.06);
         border-radius: 50%;
     }
-    .app-header::after {
-        content: '';
-        position: absolute;
-        bottom: -60px; left: 30%;
-        width: 300px; height: 180px;
-        background: rgba(255,255,255,0.04);
-        border-radius: 50%;
-    }
-    .app-header h1 {
-        color: #FFFFFF;
-        font-size: 1.9rem;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-        margin: 0 0 0.3rem 0;
-    }
+    .app-header h1 { display: none; }
     .app-header p {
-        color: rgba(255,255,255,0.75);
-        font-size: 0.95rem;
-        font-weight: 400;
+        color: rgba(255,255,255,0.9);
+        font-size: 0.92rem;
+        font-weight: 500;
         margin: 0;
     }
     .app-header .badge {
         display: inline-block;
         background: rgba(255,255,255,0.15);
         color: #fff;
-        font-size: 0.72rem;
+        font-size: 0.7rem;
         font-weight: 600;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        padding: 0.25rem 0.7rem;
+        padding: 0.2rem 0.6rem;
         border-radius: 20px;
         border: 1px solid rgba(255,255,255,0.25);
-        margin-bottom: 0.8rem;
+        white-space: nowrap;
+        flex-shrink: 0;
     }
 
     /* ── TARJETAS ── */
@@ -574,8 +564,7 @@ def run_full_process(dossier_file, config_file, download_placeholder):
 st.markdown("""
 <div class="app-header">
     <div class="badge">Nissan · Media Intelligence</div>
-    <h1>Procesador de Dossiers</h1>
-    <p>Limpieza, enriquecimiento y análisis automático de dossieres de prensa · v4.1</p>
+    <p>Limpieza, enriquecimiento y análisis automático de dossiers · v4.2</p>
 </div>
 """, unsafe_allow_html=True)
 
