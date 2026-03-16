@@ -21,13 +21,13 @@ def convert_html_entities(text: str) -> str:
         text = text.replace(entity, char)
     return text
 
+
 def clean_title(title: str) -> str:
-    """
-    Limpia SOLO las entidades HTML del título.
-    """
+    """Limpia SOLO las entidades HTML del título."""
     if not isinstance(title, str):
         return ""
     return convert_html_entities(title)
+
 
 def clean_title_for_output(title: str) -> str:
     """
@@ -43,6 +43,7 @@ def clean_title_for_output(title: str) -> str:
     title = re.sub(r'\s+-\s+.*$', '', title)
     return title.strip()
 
+
 def normalize_title_for_comparison(title: str) -> str:
     """Normaliza un título para una comparación robusta (minúsculas, sin puntuación)."""
     if not isinstance(title, str):
@@ -53,6 +54,7 @@ def normalize_title_for_comparison(title: str) -> str:
         cleaned_title = re.sub(fr'\b{abbr}\b', full_text, cleaned_title, flags=re.IGNORECASE)
     normalized_title = re.sub(r'\W+', ' ', cleaned_title).lower().strip()
     return normalized_title
+
 
 def corregir_resumen(text: str) -> str:
     """Limpia y formatea el texto del resumen."""
@@ -66,6 +68,7 @@ def corregir_resumen(text: str) -> str:
     if text and not text.endswith('...'):
         text = text.rstrip('.') + '...'
     return text
+
 
 def preprocess_text_for_topic(text: str) -> str:
     """Preprocesa texto para el modelo de tópicos."""
@@ -83,6 +86,7 @@ def preprocess_text_for_topic(text: str) -> str:
     tokens = token_pattern_re.findall(text.lower())
     return " ".join(tok for tok in tokens if tok not in stop_words_list)
 
+
 # --- Funciones de Excel y DataFrame ---
 
 def extract_link_from_cell(cell):
@@ -90,6 +94,7 @@ def extract_link_from_cell(cell):
     if cell.hyperlink and cell.hyperlink.target:
         return cell.hyperlink.target
     return cell.value
+
 
 def to_excel_from_df(df: pd.DataFrame, final_order: list) -> bytes:
     """Convierte un DataFrame a bytes de Excel."""
@@ -114,7 +119,9 @@ def to_excel_from_df(df: pd.DataFrame, final_order: list) -> bytes:
                 for row_idx, url in enumerate(df_to_excel[col_name]):
                     if pd.notna(url) and isinstance(url, str) and url.startswith('http'):
                         worksheet.write_url(row_idx + 1, col_idx, url, link_format, 'Link')
+
     return output.getvalue()
+
 
 # --- Funciones de Lógica de Negocio (Duplicados) ---
 
@@ -136,6 +143,7 @@ def calculate_title_quality_score(title: str) -> int:
         score -= 5
     return int(score)
 
+
 def are_duplicates(
     row1: pd.Series,
     row2: pd.Series,
@@ -146,7 +154,8 @@ def are_duplicates(
     Determina si dos filas son duplicadas.
     REGLA CLAVE:
     - Internet: Permite ventana de días, limpieza de títulos agresiva.
-    - Radio/TV: Fecha exacta y HORA debe coincidir (o ser nula). Si Hora es diferente, NO es duplicado.
+    - Radio/TV: Fecha exacta y HORA debe coincidir (o ser nula).
+      Si Hora es diferente, NO es duplicado.
     """
     titulo1 = normalize_title_for_comparison(row1['Título'])
     titulo2 = normalize_title_for_comparison(row2['Título'])
@@ -179,8 +188,6 @@ def are_duplicates(
         if fecha1.date() != fecha2.date():
             return False
 
-    # --- Comparación de Títulos ---
-
     # 1. Coincidencia exacta post-normalización
     if titulo1 == titulo2:
         return True
@@ -197,11 +204,12 @@ def are_duplicates(
 
     return False
 
+
 def detect_duplicates_optimized(df: pd.DataFrame) -> pd.DataFrame:
     """
     Detecta duplicados eficientemente agrupando por Medio y Mención.
-    Registra en 'source_index' el índice del original de cada duplicado,
-    para propagar sus valores de Tono/Tema en el paso posterior.
+    El de mayor calidad de título queda como original; los demás se marcan
+    como duplicados en la columna 'is_duplicate'.
     """
     df = df.reset_index(drop=True).reset_index().rename(columns={'index': 'original_index'})
     df['title_quality'] = df['Título'].apply(calculate_title_quality_score)
@@ -216,7 +224,6 @@ def detect_duplicates_optimized(df: pd.DataFrame) -> pd.DataFrame:
 
     grouping_keys = ['Medio', 'Menciones - Empresa']
     duplicate_indices = set()
-    duplicate_source_map = {}  # duplicado original_index -> original original_index
 
     for _, group in df.groupby(grouping_keys, dropna=False):
         if len(group) < 2:
@@ -236,9 +243,7 @@ def detect_duplicates_optimized(df: pd.DataFrame) -> pd.DataFrame:
 
                 if are_duplicates(pd.Series(current), pd.Series(compare)):
                     duplicate_indices.add(compare['original_index'])
-                    duplicate_source_map[compare['original_index']] = current['original_index']
 
     df['is_duplicate'] = df['original_index'].isin(duplicate_indices)
-    df['source_index'] = df['original_index'].map(duplicate_source_map)
 
     return df.sort_values('original_index').set_index('original_index').drop(columns=['title_quality'])
