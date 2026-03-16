@@ -128,7 +128,7 @@ def to_excel_from_df(df: pd.DataFrame, final_order: list) -> bytes:
         df_to_excel.to_excel(writer, index=False, sheet_name='Resultado')
         workbook = writer.book
         worksheet = writer.sheets['Resultado']
-        link_format = workbook.add_format({'color': 'blue', 'underline': 1})
+        link_format = workbook.add_format({'color': 'black', 'underline': 1})
 
         for col_name in ['Link Nota', 'Link (Streaming - Imagen)']:
             if col_name in df_to_excel.columns:
