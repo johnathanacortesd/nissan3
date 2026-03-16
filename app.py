@@ -18,20 +18,16 @@ st.set_page_config(
 # --- Estilos CSS modernos: blanco con acentos teal/verde profesional ---
 st.markdown("""
 <style>
-    /* Importar fuente profesional */
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
 
-    /* Reset y base */
     html, body, [class*="css"] {
         font-family: 'DM Sans', sans-serif;
     }
 
-    /* Fondo general */
     .stApp {
         background-color: #F7F9F8;
     }
 
-    /* Ocultar elementos por defecto de Streamlit */
     #MainMenu, footer, header { visibility: hidden; }
     .block-container {
         padding-top: 2rem;
@@ -39,7 +35,7 @@ st.markdown("""
         max-width: 1100px;
     }
 
-    /* ── HEADER PERSONALIZADO ── */
+    /* ── HEADER ── */
     .app-header {
         background: linear-gradient(135deg, #0D4F3C 0%, #1A7A5E 60%, #22A37A 100%);
         border-radius: 16px;
@@ -91,7 +87,7 @@ st.markdown("""
         margin-bottom: 0.8rem;
     }
 
-    /* ── TARJETAS / SECCIONES ── */
+    /* ── TARJETAS ── */
     .card {
         background: #FFFFFF;
         border: 1px solid #E8EFEC;
@@ -141,18 +137,34 @@ st.markdown("""
     .metric-card.accent .metric-value { color: #1A7A5E; }
     .metric-card.muted .metric-value { color: #9BB5AC; }
 
-    /* ── INSTRUCCIONES ── */
-    .instructions {
-        background: #F0F7F4;
-        border-left: 3px solid #1A7A5E;
-        border-radius: 0 10px 10px 0;
-        padding: 1.2rem 1.5rem;
-        margin-bottom: 1.5rem;
+    /* ── BANNER DE ÉXITO ── */
+    .success-banner {
+        background: linear-gradient(135deg, #0D4F3C, #1A7A5E);
+        border-radius: 12px;
+        padding: 1.2rem 1.8rem;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin: 1.5rem 0;
+        box-shadow: 0 2px 12px rgba(13,79,60,0.2);
     }
-    .instructions p { margin: 0; color: #2D5A4A; font-size: 0.9rem; line-height: 1.7; }
-    .instructions strong { color: #0D4F3C; }
+    .success-banner .icon {
+        font-size: 1.6rem;
+        line-height: 1;
+    }
+    .success-banner .text strong {
+        display: block;
+        color: #FFFFFF;
+        font-size: 1rem;
+        font-weight: 700;
+        margin-bottom: 0.15rem;
+    }
+    .success-banner .text span {
+        color: rgba(255,255,255,0.72);
+        font-size: 0.85rem;
+    }
 
-    /* ── STEPS NUMERADOS ── */
+    /* ── STEPS ── */
     .step {
         display: flex;
         align-items: flex-start;
@@ -200,6 +212,7 @@ st.markdown("""
         transition: all 0.2s;
         box-shadow: 0 2px 8px rgba(13,79,60,0.25);
         width: 100%;
+        height: 48px;
     }
     .stButton > button[kind="primary"]:hover {
         background: linear-gradient(135deg, #0A3D2E, #156A50);
@@ -224,6 +237,7 @@ st.markdown("""
         font-weight: 600;
         transition: all 0.2s;
         width: 100%;
+        height: 48px;
     }
     .stDownloadButton > button:hover {
         background: #F0F7F4;
@@ -231,7 +245,7 @@ st.markdown("""
         transform: translateY(-1px);
     }
 
-    /* ── ALERTAS / MENSAJES ── */
+    /* ── ALERTAS ── */
     .stSuccess {
         background: #F0F7F4;
         border: 1px solid #B2D4C8;
@@ -247,12 +261,6 @@ st.markdown("""
         background: #FEF2F2;
         border: 1px solid #FCA5A5;
         border-radius: 10px;
-    }
-    .stInfo {
-        background: #F0F7F4;
-        border: 1px solid #B2D4C8;
-        border-radius: 10px;
-        color: #0D4F3C;
     }
 
     /* ── PROGRESS BAR ── */
@@ -276,17 +284,15 @@ st.markdown("""
         border: 1px solid #E8EFEC;
     }
 
-    /* ── SEPARADOR ── */
     hr {
         border: none;
         border-top: 1px solid #E8EFEC;
         margin: 1.5rem 0;
     }
 
-    /* ── SPINNER ── */
     .stSpinner > div { border-top-color: #1A7A5E !important; }
 
-    /* ── FILE STATUS BADGES ── */
+    /* ── FILE STATUS ── */
     .file-status {
         display: flex;
         align-items: center;
@@ -308,7 +314,6 @@ st.markdown("""
         border: 1px solid #F5C97A;
     }
 
-    /* ── SECCIÓN DE RESULTADOS ── */
     .results-header {
         font-size: 1.1rem;
         font-weight: 700;
@@ -520,7 +525,6 @@ def run_full_process(dossier_file, config_file):
         )
 
     # --- Marcado final de duplicadas ---
-    # Duplicadas: "-" en Tema y Temas Generales - Tema, "Duplicada" SOLO en Tono.
     mask_dup = df['is_duplicate']
     if mask_dup.any():
         if 'Temas Generales - Tema' in df.columns:
@@ -531,7 +535,6 @@ def run_full_process(dossier_file, config_file):
 
     # --- 8. Resultados Finales ---
     progress_bar.progress(100, text="✓ Proceso completado")
-    st.balloons()
 
     final_order = [
         "ID Noticia", "Fecha", "Hora", "Medio", "Tipo de Medio", "Sección - Programa",
@@ -541,11 +544,24 @@ def run_full_process(dossier_file, config_file):
         "Link (Streaming - Imagen)", "Menciones - Empresa"
     ]
 
-    # Métricas
     total = len(df)
     dups_count = int(mask_dup.sum())
     unique_count = total - dups_count
+    filename = f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    excel_data = utils.to_excel_from_df(df, final_order)
 
+    # Banner de éxito
+    st.markdown(f"""
+    <div class="success-banner">
+        <div class="icon">⚡</div>
+        <div class="text">
+            <strong>Proceso finalizado correctamente</strong>
+            <span>{total:,} filas procesadas · {unique_count:,} únicas · {dups_count:,} duplicadas</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Métricas
     st.markdown('<p class="results-header">Resumen del proceso</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="metrics-row">
@@ -564,15 +580,18 @@ def run_full_process(dossier_file, config_file):
     </div>
     """, unsafe_allow_html=True)
 
-    # Descarga
-    excel_data = utils.to_excel_from_df(df, final_order)
-    filename = f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    st.download_button(
-        label="⬇ Descargar archivo procesado (.xlsx)",
-        data=excel_data,
-        file_name=filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # Botones: Iniciar (deshabilitado visualmente) | Descargar — lado a lado
+    st.markdown('<p class="results-header">Descarga</p>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        st.button("✓ Proceso completado", disabled=True, type="primary")
+    with btn_col2:
+        st.download_button(
+            label="⬇ Descargar archivo procesado (.xlsx)",
+            data=excel_data,
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     # Previsualización
     st.markdown('<p class="results-header">Previsualización de resultados</p>', unsafe_allow_html=True)
@@ -620,7 +639,7 @@ st.markdown("""
     </div>
     <div class="step">
         <div class="step-num">4</div>
-        <div class="step-text">Descarga el archivo final procesado con los resultados enriquecidos.</div>
+        <div class="step-text">Descarga el archivo final desde el botón que aparece al lado del estado del proceso.</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -682,9 +701,26 @@ if uploaded_files:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-if st.button(
-    "▶  Iniciar proceso completo",
-    disabled=not (dossier_file and config_file),
-    type="primary"
-):
+# Botones principales: Iniciar | Descargar (descargar aparece solo tras el proceso)
+col_start, col_download = st.columns(2)
+
+with col_start:
+    start_clicked = st.button(
+        "▶  Iniciar proceso completo",
+        disabled=not (dossier_file and config_file),
+        type="primary"
+    )
+
+# El placeholder en col_download se rellena dentro de run_full_process
+# tras generar el Excel. Para mantener el layout simétrico mostramos
+# un botón inactivo mientras no se ha procesado nada.
+with col_download:
+    if not start_clicked:
+        st.button(
+            "⬇ Descargar archivo procesado (.xlsx)",
+            disabled=True,
+            type="primary"
+        )
+
+if start_clicked:
     run_full_process(dossier_file, config_file)
