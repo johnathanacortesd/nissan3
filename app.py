@@ -165,7 +165,7 @@ def run_full_process(dossier_file, config_file):
         df['Tema'] = df['Temas Generales - Tema'].astype(str).str.strip().map(final_topic_map).fillna('Indefinido')
     
     # Marca duplicados visualmente
-    df.loc[df['is_duplicate'], ['Tono', 'Tema', 'Temas Generales - Tema']] = 'Duplicada'
+    df.loc[df['is_duplicate'], ['Tono']] = 'Duplicada'
 
     # --- 8. Generación de Resultados Finales ---
     progress_bar.progress(100, text="Paso 8/8: ¡Proceso completado!")
