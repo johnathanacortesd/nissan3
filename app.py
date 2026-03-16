@@ -8,7 +8,317 @@ import nltk
 import dossier_utils as utils
 
 # --- Configuración de la página ---
-st.set_page_config(page_title="Procesador de Dossiers Nissan v4.0", layout="wide")
+st.set_page_config(
+    page_title="Dossier Intelligence · Nissan",
+    page_icon="📰",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# --- Estilos CSS modernos: blanco con acentos teal/verde profesional ---
+st.markdown("""
+<style>
+    /* Importar fuente profesional */
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+
+    /* Reset y base */
+    html, body, [class*="css"] {
+        font-family: 'DM Sans', sans-serif;
+    }
+
+    /* Fondo general */
+    .stApp {
+        background-color: #F7F9F8;
+    }
+
+    /* Ocultar elementos por defecto de Streamlit */
+    #MainMenu, footer, header { visibility: hidden; }
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1100px;
+    }
+
+    /* ── HEADER PERSONALIZADO ── */
+    .app-header {
+        background: linear-gradient(135deg, #0D4F3C 0%, #1A7A5E 60%, #22A37A 100%);
+        border-radius: 16px;
+        padding: 2.5rem 2.8rem;
+        margin-bottom: 2rem;
+        position: relative;
+        overflow: hidden;
+    }
+    .app-header::before {
+        content: '';
+        position: absolute;
+        top: -40px; right: -40px;
+        width: 200px; height: 200px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 50%;
+    }
+    .app-header::after {
+        content: '';
+        position: absolute;
+        bottom: -60px; left: 30%;
+        width: 300px; height: 180px;
+        background: rgba(255,255,255,0.04);
+        border-radius: 50%;
+    }
+    .app-header h1 {
+        color: #FFFFFF;
+        font-size: 1.9rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.3rem 0;
+    }
+    .app-header p {
+        color: rgba(255,255,255,0.75);
+        font-size: 0.95rem;
+        font-weight: 400;
+        margin: 0;
+    }
+    .app-header .badge {
+        display: inline-block;
+        background: rgba(255,255,255,0.15);
+        color: #fff;
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 0.25rem 0.7rem;
+        border-radius: 20px;
+        border: 1px solid rgba(255,255,255,0.25);
+        margin-bottom: 0.8rem;
+    }
+
+    /* ── TARJETAS / SECCIONES ── */
+    .card {
+        background: #FFFFFF;
+        border: 1px solid #E8EFEC;
+        border-radius: 12px;
+        padding: 1.6rem 1.8rem;
+        margin-bottom: 1.2rem;
+        box-shadow: 0 1px 4px rgba(13,79,60,0.06);
+    }
+    .card-title {
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #1A7A5E;
+        margin-bottom: 1rem;
+    }
+
+    /* ── MÉTRICAS ── */
+    .metrics-row {
+        display: flex;
+        gap: 1rem;
+        margin: 1.5rem 0;
+    }
+    .metric-card {
+        flex: 1;
+        background: #FFFFFF;
+        border: 1px solid #E8EFEC;
+        border-radius: 12px;
+        padding: 1.4rem 1.6rem;
+        text-align: center;
+        box-shadow: 0 1px 4px rgba(13,79,60,0.06);
+    }
+    .metric-card .metric-value {
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: #0D4F3C;
+        line-height: 1;
+        margin-bottom: 0.4rem;
+        font-family: 'DM Mono', monospace;
+    }
+    .metric-card .metric-label {
+        font-size: 0.78rem;
+        color: #6B8F82;
+        font-weight: 500;
+        letter-spacing: 0.03em;
+    }
+    .metric-card.accent .metric-value { color: #1A7A5E; }
+    .metric-card.muted .metric-value { color: #9BB5AC; }
+
+    /* ── INSTRUCCIONES ── */
+    .instructions {
+        background: #F0F7F4;
+        border-left: 3px solid #1A7A5E;
+        border-radius: 0 10px 10px 0;
+        padding: 1.2rem 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+    .instructions p { margin: 0; color: #2D5A4A; font-size: 0.9rem; line-height: 1.7; }
+    .instructions strong { color: #0D4F3C; }
+
+    /* ── STEPS NUMERADOS ── */
+    .step {
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        margin-bottom: 0.8rem;
+    }
+    .step-num {
+        min-width: 28px;
+        height: 28px;
+        background: #1A7A5E;
+        color: white;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.78rem;
+        font-weight: 700;
+        margin-top: 1px;
+    }
+    .step-text { color: #2D5A4A; font-size: 0.9rem; line-height: 1.6; }
+
+    /* ── FILE UPLOADER ── */
+    [data-testid="stFileUploader"] {
+        background: #FFFFFF;
+        border: 2px dashed #B2D4C8;
+        border-radius: 12px;
+        padding: 0.5rem;
+        transition: border-color 0.2s;
+    }
+    [data-testid="stFileUploader"]:hover {
+        border-color: #1A7A5E;
+    }
+
+    /* ── BOTÓN PRIMARIO ── */
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #0D4F3C, #1A7A5E);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        padding: 0.7rem 2rem;
+        font-family: 'DM Sans', sans-serif;
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        transition: all 0.2s;
+        box-shadow: 0 2px 8px rgba(13,79,60,0.25);
+        width: 100%;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #0A3D2E, #156A50);
+        box-shadow: 0 4px 14px rgba(13,79,60,0.35);
+        transform: translateY(-1px);
+    }
+    .stButton > button[kind="primary"]:disabled {
+        background: #C5D9D4;
+        box-shadow: none;
+        transform: none;
+    }
+
+    /* ── BOTÓN DESCARGA ── */
+    .stDownloadButton > button {
+        background: #FFFFFF;
+        color: #0D4F3C;
+        border: 2px solid #1A7A5E;
+        border-radius: 10px;
+        padding: 0.65rem 1.8rem;
+        font-family: 'DM Sans', sans-serif;
+        font-size: 0.9rem;
+        font-weight: 600;
+        transition: all 0.2s;
+        width: 100%;
+    }
+    .stDownloadButton > button:hover {
+        background: #F0F7F4;
+        box-shadow: 0 2px 10px rgba(13,79,60,0.15);
+        transform: translateY(-1px);
+    }
+
+    /* ── ALERTAS / MENSAJES ── */
+    .stSuccess {
+        background: #F0F7F4;
+        border: 1px solid #B2D4C8;
+        border-radius: 10px;
+        color: #0D4F3C;
+    }
+    .stWarning {
+        background: #FFF8ED;
+        border: 1px solid #F5C97A;
+        border-radius: 10px;
+    }
+    .stError {
+        background: #FEF2F2;
+        border: 1px solid #FCA5A5;
+        border-radius: 10px;
+    }
+    .stInfo {
+        background: #F0F7F4;
+        border: 1px solid #B2D4C8;
+        border-radius: 10px;
+        color: #0D4F3C;
+    }
+
+    /* ── PROGRESS BAR ── */
+    .stProgress > div > div > div {
+        background: linear-gradient(90deg, #1A7A5E, #22A37A);
+        border-radius: 4px;
+    }
+
+    /* ── EXPANDER ── */
+    .streamlit-expanderHeader {
+        background: #F7F9F8;
+        border-radius: 8px;
+        font-weight: 500;
+        color: #0D4F3C;
+    }
+
+    /* ── DATAFRAME ── */
+    [data-testid="stDataFrame"] {
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid #E8EFEC;
+    }
+
+    /* ── SEPARADOR ── */
+    hr {
+        border: none;
+        border-top: 1px solid #E8EFEC;
+        margin: 1.5rem 0;
+    }
+
+    /* ── SPINNER ── */
+    .stSpinner > div { border-top-color: #1A7A5E !important; }
+
+    /* ── FILE STATUS BADGES ── */
+    .file-status {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.7rem 1rem;
+        border-radius: 8px;
+        font-size: 0.87rem;
+        font-weight: 500;
+        margin-top: 0.5rem;
+    }
+    .file-status.ok {
+        background: #F0F7F4;
+        color: #0D4F3C;
+        border: 1px solid #B2D4C8;
+    }
+    .file-status.missing {
+        background: #FFF8ED;
+        color: #92400E;
+        border: 1px solid #F5C97A;
+    }
+
+    /* ── SECCIÓN DE RESULTADOS ── */
+    .results-header {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #0D4F3C;
+        margin: 1.8rem 0 1rem 0;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #E8EFEC;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- Descarga NLTK stopwords si es necesario ---
 try:
@@ -16,7 +326,6 @@ try:
 except LookupError:
     with st.spinner("Descargando recursos de lenguaje por primera vez..."):
         nltk.download('stopwords')
-    st.success("Recursos listos.")
 
 
 # ==============================================================================
@@ -32,9 +341,9 @@ def load_ml_models():
         return sentiment_pipeline, topic_pipeline
     except FileNotFoundError as e:
         st.error(
-            f"Error Crítico: No se encontró el archivo de modelo: {e.filename}. "
-            "Asegúrate de que 'pipeline_sentimiento.pkl' y 'pipeline_tema.pkl' "
-            "estén en la misma carpeta."
+            f"**Error Crítico:** No se encontró `{e.filename}`. "
+            "Asegúrate de que `pipeline_sentimiento.pkl` y `pipeline_tema.pkl` "
+            "estén en la misma carpeta que esta app."
         )
         st.stop()
 
@@ -72,11 +381,11 @@ def read_and_expand_dossier(dossier_file):
 
 
 def run_full_process(dossier_file, config_file):
-    st.markdown("---")
+    st.markdown("<hr>", unsafe_allow_html=True)
     progress_bar = st.progress(0, text="Iniciando proceso...")
 
     # --- 1. Carga de modelos y configuración ---
-    progress_bar.progress(5, text="Paso 1/8: Cargando modelos y configuración...")
+    progress_bar.progress(5, text="Paso 1 / 8 — Cargando modelos y configuración...")
     sentiment_pipeline, topic_pipeline = load_ml_models()
 
     try:
@@ -98,19 +407,19 @@ def run_full_process(dossier_file, config_file):
             index=config_sheets['Mapa_Temas'].iloc[:, 0].astype(str).str.strip()
         ).to_dict()
     except Exception as e:
-        st.error(f"Error al cargar `Configuracion.xlsx`: {e}. Revisa el archivo.")
+        st.error(f"**Error al cargar `Configuracion.xlsx`:** {e}")
         st.stop()
 
     # --- 2. Lectura y Expansión del Dossier ---
-    progress_bar.progress(15, text="Paso 2/8: Leyendo Dossier y expandiendo filas...")
+    progress_bar.progress(15, text="Paso 2 / 8 — Leyendo Dossier y expandiendo filas...")
     df = read_and_expand_dossier(dossier_file)
 
     # --- 3. Limpieza y Normalización de Datos ---
-    progress_bar.progress(25, text="Paso 3/8: Aplicando mapeos y normalizaciones...")
+    progress_bar.progress(25, text="Paso 3 / 8 — Aplicando mapeos y normalizaciones...")
     if 'Fecha' in df.columns:
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce', dayfirst=True)
         if df['Fecha'].isna().any():
-            st.warning("⚠️ Atención: Algunas fechas no se pudieron convertir. Revisa el archivo original.")
+            st.warning("⚠️ Algunas fechas no se pudieron convertir. Revisa el archivo original.")
 
     if 'Título' in df.columns:
         df['Título'] = df['Título'].apply(utils.clean_title)
@@ -119,12 +428,9 @@ def run_full_process(dossier_file, config_file):
         df['Resumen - Aclaracion'] = df['Resumen - Aclaracion'].apply(utils.corregir_resumen)
 
     tipo_medio_map = {
-        'online': 'Internet',
-        'diario': 'Prensa',
-        'am': 'Radio',
-        'fm': 'Radio',
-        'aire': 'Televisión',
-        'cable': 'Televisión',
+        'online': 'Internet', 'diario': 'Prensa',
+        'am': 'Radio', 'fm': 'Radio',
+        'aire': 'Televisión', 'cable': 'Televisión',
         'revista': 'Revista'
     }
     df['Tipo de Medio'] = (
@@ -152,7 +458,7 @@ def run_full_process(dossier_file, config_file):
         )
 
     # --- 4. Reorganización de Columnas ---
-    progress_bar.progress(40, text="Paso 4/8: Reorganizando columnas de links y dimensiones...")
+    progress_bar.progress(40, text="Paso 4 / 8 — Reorganizando columnas de links y dimensiones...")
     is_print = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
     is_broadcast = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
 
@@ -169,11 +475,11 @@ def run_full_process(dossier_file, config_file):
         df.loc[is_broadcast, 'Duración - Nro. Caracteres'] = np.nan
 
     # --- 5. Detección de Duplicados ---
-    progress_bar.progress(50, text="Paso 5/8: Detectando duplicados (optimizado)...")
+    progress_bar.progress(50, text="Paso 5 / 8 — Detectando duplicados...")
     df = utils.detect_duplicates_optimized(df)
 
     # --- 6. Aplicación de Modelos de IA ---
-    progress_bar.progress(70, text="Paso 6/8: Aplicando modelos de IA a noticias únicas...")
+    progress_bar.progress(70, text="Paso 6 / 8 — Aplicando modelos de IA a noticias únicas...")
     df_valid = df[~df['is_duplicate']].copy()
     if not df_valid.empty:
         df_valid['texto_para_ia'] = (
@@ -192,13 +498,15 @@ def run_full_process(dossier_file, config_file):
         df.update(df_valid[['Tono', 'Temas Generales - Tema']])
 
     # --- 7. Homogeneización de Temas y Mapeo Final ---
-    progress_bar.progress(85, text="Paso 7/8: Homogeneizando y mapeando temas...")
+    progress_bar.progress(85, text="Paso 7 / 8 — Homogeneizando y mapeando temas...")
     df_valid_homog = df[~df['is_duplicate']].copy()
     if not df_valid_homog.empty and 'Temas Generales - Tema' in df_valid_homog.columns:
         df_valid_homog['titulo_norm_homog'] = df_valid_homog['Título'].apply(
             utils.normalize_title_for_comparison
         )
-        homogenized_temas = df_valid_homog.groupby('titulo_norm_homog')['Temas Generales - Tema'].transform(
+        homogenized_temas = df_valid_homog.groupby(
+            'titulo_norm_homog'
+        )['Temas Generales - Tema'].transform(
             lambda x: x.mode()[0] if not x.mode().empty else x
         )
         df_valid_homog['Temas Generales - Tema'] = homogenized_temas
@@ -212,8 +520,7 @@ def run_full_process(dossier_file, config_file):
         )
 
     # --- Marcado final de duplicadas ---
-    # Las filas duplicadas muestran "-" en Tema y Temas Generales - Tema,
-    # y "Duplicada" SOLO en la columna Tono.
+    # Duplicadas: "-" en Tema y Temas Generales - Tema, "Duplicada" SOLO en Tono.
     mask_dup = df['is_duplicate']
     if mask_dup.any():
         if 'Temas Generales - Tema' in df.columns:
@@ -222,8 +529,8 @@ def run_full_process(dossier_file, config_file):
             df.loc[mask_dup, 'Tema'] = '-'
         df.loc[mask_dup, 'Tono'] = 'Duplicada'
 
-    # --- 8. Generación de Resultados Finales ---
-    progress_bar.progress(100, text="Paso 8/8: ¡Proceso completado!")
+    # --- 8. Resultados Finales ---
+    progress_bar.progress(100, text="✓ Proceso completado")
     st.balloons()
 
     final_order = [
@@ -233,24 +540,42 @@ def run_full_process(dossier_file, config_file):
         "Temas Generales - Tema", "Resumen - Aclaracion", "Link Nota",
         "Link (Streaming - Imagen)", "Menciones - Empresa"
     ]
-    # Nota: 'is_duplicate' no está en final_order → no aparece en Excel ni previsualización.
 
-    st.subheader("📊 Resumen del Proceso")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Filas Totales Procesadas", len(df))
-    dups_count = int(df['is_duplicate'].sum())
-    col2.metric("Filas Marcadas como Duplicadas", dups_count)
-    col3.metric("Filas Únicas Analizadas", len(df) - dups_count)
+    # Métricas
+    total = len(df)
+    dups_count = int(mask_dup.sum())
+    unique_count = total - dups_count
 
+    st.markdown('<p class="results-header">Resumen del proceso</p>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="metrics-row">
+        <div class="metric-card">
+            <div class="metric-value">{total:,}</div>
+            <div class="metric-label">Filas totales procesadas</div>
+        </div>
+        <div class="metric-card accent">
+            <div class="metric-value">{unique_count:,}</div>
+            <div class="metric-label">Noticias únicas analizadas</div>
+        </div>
+        <div class="metric-card muted">
+            <div class="metric-value">{dups_count:,}</div>
+            <div class="metric-label">Filas marcadas como duplicadas</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Descarga
     excel_data = utils.to_excel_from_df(df, final_order)
+    filename = f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     st.download_button(
-        label="📥 Descargar Archivo Final Procesado",
+        label="⬇ Descargar archivo procesado (.xlsx)",
         data=excel_data,
-        file_name=f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.sheet"
+        file_name=filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    st.subheader("✍️ Previsualización de Resultados")
+    # Previsualización
+    st.markdown('<p class="results-header">Previsualización de resultados</p>', unsafe_allow_html=True)
     final_cols_in_df = [col for col in final_order if col in df.columns]
     df_display = df[final_cols_in_df].copy()
 
@@ -265,32 +590,61 @@ def run_full_process(dossier_file, config_file):
 
 
 # ==============================================================================
-# INTERFAZ PRINCIPAL DE STREAMLIT
+# INTERFAZ PRINCIPAL
 # ==============================================================================
-st.title("🚀 Procesador Inteligente de Dossiers v4.0")
-st.markdown(
-    "Herramienta para limpiar, enriquecer y analizar dossieres de noticias. "
-    "**Versión optimizada para alto volumen de datos.**"
-)
-st.info(
-    "**Instrucciones:**\n\n"
-    "1. Prepara tu archivo **Dossier** principal y tu archivo **`Configuracion.xlsx`**.\n"
-    "2. Sube ambos archivos en el área de abajo.\n"
-    "3. Haz clic en '▶️ Iniciar Proceso Completo'."
-)
 
-with st.expander("Ver estructura requerida para `Configuracion.xlsx`"):
-    st.markdown(
-        "- **`Regiones`**: Columna A (Medio), Columna B (Región).\n"
-        "- **`Internet`**: Columna A (Medio Original), Columna B (Medio Mapeado).\n"
-        "- **`Menciones`**: Columna A (Mención Original), Columna B (Mención Mapeada).\n"
-        "- **`Mapa_Temas`**: Columna A (Temas Generales - Tema), Columna B (Tema)."
-    )
+# Header
+st.markdown("""
+<div class="app-header">
+    <div class="badge">Nissan · Media Intelligence</div>
+    <h1>Procesador de Dossiers</h1>
+    <p>Limpieza, enriquecimiento y análisis automático de dossieres de prensa · v4.1</p>
+</div>
+""", unsafe_allow_html=True)
 
+# Instrucciones
+st.markdown("""
+<div class="card">
+    <div class="card-title">Cómo usar esta herramienta</div>
+    <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-text">Prepara tu archivo <strong>Dossier</strong> (.xlsx) y el archivo <strong>Configuracion.xlsx</strong>.</div>
+    </div>
+    <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-text">Sube ambos archivos en el área de carga de abajo. El sistema los detecta automáticamente.</div>
+    </div>
+    <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-text">Haz clic en <strong>Iniciar proceso</strong> y espera a que finalice el análisis.</div>
+    </div>
+    <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-text">Descarga el archivo final procesado con los resultados enriquecidos.</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Estructura de configuración
+with st.expander("📋  Ver estructura requerida para Configuracion.xlsx"):
+    st.markdown("""
+    | Hoja | Columna A | Columna B |
+    |------|-----------|-----------|
+    | `Regiones` | Medio | Región |
+    | `Internet` | Medio Original | Medio Mapeado |
+    | `Menciones` | Mención Original | Mención Mapeada |
+    | `Mapa_Temas` | Temas Generales - Tema | Tema |
+    """)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# Carga de archivos
+st.markdown('<div class="card-title">Carga de archivos</div>', unsafe_allow_html=True)
 uploaded_files = st.file_uploader(
-    "Arrastra y suelta tus archivos aquí (Dossier y Configuracion.xlsx)",
+    "Arrastra los archivos aquí o haz clic para seleccionarlos",
     type=["xlsx"],
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    label_visibility="collapsed"
 )
 
 dossier_file, config_file = None, None
@@ -302,18 +656,34 @@ if uploaded_files:
         else:
             dossier_file = file
 
-    if dossier_file:
-        st.success(f"✅ Archivo Dossier cargado: **{dossier_file.name}**")
-    else:
-        st.warning("⚠️ No se ha subido un archivo que parezca ser el Dossier.")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if dossier_file:
+            st.markdown(
+                f'<div class="file-status ok">✓ Dossier cargado — <strong>{dossier_file.name}</strong></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div class="file-status missing">⚠ No se detectó el archivo Dossier</div>',
+                unsafe_allow_html=True
+            )
+    with col_b:
+        if config_file:
+            st.markdown(
+                f'<div class="file-status ok">✓ Configuración cargada — <strong>{config_file.name}</strong></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div class="file-status missing">⚠ No se detectó Configuracion.xlsx</div>',
+                unsafe_allow_html=True
+            )
 
-    if config_file:
-        st.success(f"✅ Archivo de Configuración cargado: **{config_file.name}**")
-    else:
-        st.warning("⚠️ No se ha subido el archivo `Configuracion.xlsx`.")
+st.markdown("<br>", unsafe_allow_html=True)
 
 if st.button(
-    "▶️ Iniciar Proceso Completo",
+    "▶  Iniciar proceso completo",
     disabled=not (dossier_file and config_file),
     type="primary"
 ):
