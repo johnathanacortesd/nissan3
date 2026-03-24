@@ -418,7 +418,7 @@ def run_full_process(dossier_file, config_file, download_placeholder):
 
     # --- 4. Reorganización de columnas ---
     progress_bar.progress(40, text="Paso 4 / 8 — Reorganizando columnas de links y dimensiones...")
-    is_print     = df['Tipo de Medio'].isin(['Prensa', 'Revista'])
+    is_print     = df['Tipo de Medio'].isin(['Prensa', 'Revistas'])
     is_broadcast = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
 
     if 'Link Nota' in df.columns and 'Link (Streaming - Imagen)' in df.columns:
