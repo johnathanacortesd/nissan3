@@ -390,7 +390,7 @@ def run_full_process(dossier_file, config_file, download_placeholder):
         'online': 'Internet', 'diario': 'Prensa',
         'am': 'Radio', 'fm': 'Radio',
         'aire': 'Televisión', 'cable': 'Televisión',
-        'revista': 'Revista'
+        'revista': 'Revistas'
     }
     df['Tipo de Medio'] = (
         df['Tipo de Medio'].str.lower().str.strip()
