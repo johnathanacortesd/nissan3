@@ -64,13 +64,29 @@ def normalize_title_for_comparison(title: str) -> str:
 
 def normalize_url(url) -> str:
     """
-    Normaliza una URL para comparación: minúsculas, sin espacios, sin trailing slash.
+    Normaliza una URL para comparación:
+    - Minúsculas y sin espacios
+    - Sin trailing slash
+    - Sin prefijo 'www.' (así 'elpais.com.co' y 'www.elpais.com.co' son iguales)
+    - Sin parámetros de query (?...) ni fragmentos (#...)
     Retorna cadena vacía si no es una URL válida.
     """
     if not isinstance(url, str):
         return ""
     url = url.strip().lower().rstrip('/')
-    return url if url.startswith('http') else ""
+
+    if not url.startswith('http'):
+        return ""
+
+    # ── NUEVA REGLA: eliminar 'www.' del dominio ──────────────────────────────
+    # Cubre tanto http://www. como https://www.
+    url = re.sub(r'^(https?://)www\.', r'\1', url)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Eliminar query string y fragmentos para comparar solo la ruta canónica
+    url = re.split(r'[?#]', url)[0].rstrip('/')
+
+    return url
 
 
 def corregir_resumen(text: str) -> str:
@@ -180,9 +196,11 @@ def are_duplicates(
         * CONDICIÓN 1: Títulos iguales/similares tras normalización (incluyendo
           variantes con caracteres especiales, tildes, apóstrofes).
           Ejemplo: 'Women's Car' ≈ 'Womens Car' → duplicada.
-        * CONDICIÓN 2 (nueva): Mismo Link (Streaming - Imagen) normalizado
-          + títulos iguales/similares → duplicada.
-          Ambas condiciones son independientes: basta con que una se cumpla.
+        * CONDICIÓN 2: Mismo Link (Streaming - Imagen) normalizado (con o sin
+          'www.', ignorando query string y fragmentos) → duplicada independiente
+          del grado de similaridad del título.
+          Ejemplo: 'elpais.com.co/...' == 'www.elpais.com.co/...' → duplicada.
+        Ambas condiciones son independientes: basta con que una se cumpla.
     - Radio/TV:
         * Fecha exacta requerida.
         * Si ambas tienen Hora y son distintas → NO es duplicada.
@@ -222,6 +240,18 @@ def are_duplicates(
         if fecha1.date() != fecha2.date():
             return False
 
+    # ── NUEVA REGLA (Internet): mismo URL canónico → duplicada directa ────────
+    # Se evalúa ANTES de la comparación de títulos para cortocircuitar rápido.
+    # normalize_url ya elimina 'www.', query strings y fragmentos, por lo que
+    # 'https://elpais.com.co/nota-1' == 'https://www.elpais.com.co/nota-1'.
+    if tipo_medio == 'Internet':
+        url_col = 'Link (Streaming - Imagen)'
+        url1 = normalize_url(row1.get(url_col, ''))
+        url2 = normalize_url(row2.get(url_col, ''))
+        if url1 and url2 and url1 == url2:
+            return True
+    # ─────────────────────────────────────────────────────────────────────────
+
     # --- Comparación de Títulos (aplica a todos los medios) ---
 
     titles_match = False
@@ -248,21 +278,8 @@ def are_duplicates(
     if tipo_medio != 'Internet':
         return True
 
-    # --- Lógica adicional para Internet: verificación de URL ---
-    # Para Internet, título similar ya es suficiente para marcar como duplicada.
-    # Adicionalmente, mismo URL refuerza la detección (ya cubierta por titles_match).
-    # La URL se usa como señal de respaldo para casos donde el título difiere levemente
-    # pero la URL es idéntica (mismo artículo publicado con variante de título).
-    url_col = 'Link (Streaming - Imagen)'
-    url1 = normalize_url(row1.get(url_col, ''))
-    url2 = normalize_url(row2.get(url_col, ''))
-
-    if url1 and url2 and url1 == url2:
-        # Mismo enlace → duplicada confirmada (el título ya era similar)
-        return True
-
-    # Título similar pero URLs distintas → igual se marca como duplicada
-    # (misma noticia republicada con URL diferente)
+    # Para Internet con títulos similares → duplicada confirmada
+    # (misma noticia republicada, con o sin URL diferente)
     return True
 
 
