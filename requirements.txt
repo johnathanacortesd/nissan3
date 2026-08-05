@@ -6,3 +6,4 @@ nltk
 joblib
 tqdm
 xlsxwriter
+starlette<0.40.0
